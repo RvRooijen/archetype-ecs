@@ -2,25 +2,37 @@ export function createEntityManager() {
   let nextId = 1;
   const allEntityIds = new Set();
 
+  // Component bit registry (symbol → bit index 0..31)
+  const componentBitIndex = new Map();
+  let nextBitIndex = 0;
+
+  function getBit(type) {
+    let bit = componentBitIndex.get(type);
+    if (bit === undefined) {
+      bit = nextBitIndex++;
+      componentBitIndex.set(type, bit);
+    }
+    return bit;
+  }
+
+  function computeMask(types) {
+    let mask = 0;
+    for (const t of types) {
+      mask |= (1 << getBit(t));
+    }
+    return mask;
+  }
+
   // Archetype storage
-  const archetypes = new Map();         // key → Archetype
+  const archetypes = new Map();         // bitmask → Archetype
   const entityArchetype = new Map();    // entityId → Archetype
 
   // Query cache
   let queryCacheVersion = 0;
   const queryCache = new Map();         // queryKey → { version, archetypes[] }
 
-  function makeArchetypeKey(types) {
-    const descs = [];
-    for (const sym of types) {
-      descs.push(sym.description);
-    }
-    descs.sort();
-    return descs.join('|');
-  }
-
   function getOrCreateArchetype(types) {
-    const key = makeArchetypeKey(types);
+    const key = computeMask(types);
     let arch = archetypes.get(key);
     if (!arch) {
       arch = {
@@ -76,10 +88,10 @@ export function createEntityManager() {
   }
 
   function getMatchingArchetypes(types, excludeTypes) {
-    let queryKey = makeArchetypeKey(types);
-    if (excludeTypes && excludeTypes.length > 0) {
-      queryKey += '!' + makeArchetypeKey(excludeTypes);
-    }
+    const includeMask = computeMask(types);
+    const excludeMask = excludeTypes && excludeTypes.length > 0 ? computeMask(excludeTypes) : 0;
+    const queryKey = `${includeMask}:${excludeMask}`;
+
     const cached = queryCache.get(queryKey);
     if (cached && cached.version === queryCacheVersion) {
       return cached.archetypes;
@@ -87,22 +99,10 @@ export function createEntityManager() {
 
     const matching = [];
     for (const arch of archetypes.values()) {
-      let match = true;
-      for (const t of types) {
-        if (!arch.types.has(t)) {
-          match = false;
-          break;
-        }
+      if ((arch.key & includeMask) === includeMask &&
+          (arch.key & excludeMask) === 0) {
+        matching.push(arch);
       }
-      if (match && excludeTypes) {
-        for (const t of excludeTypes) {
-          if (arch.types.has(t)) {
-            match = false;
-            break;
-          }
-        }
-      }
-      if (match) matching.push(arch);
     }
 
     queryCache.set(queryKey, { version: queryCacheVersion, archetypes: matching });
@@ -342,7 +342,7 @@ export function createEntityManager() {
       for (const [entityId, compMap] of entityComponents) {
         if (compMap.size === 0) continue; // entity with no components
 
-        const key = makeArchetypeKey([...compMap.keys()]);
+        const key = computeMask([...compMap.keys()]);
         if (!groupedByKey.has(key)) {
           groupedByKey.set(key, []);
         }
