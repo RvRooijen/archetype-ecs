@@ -1,4 +1,5 @@
-import { describe, test, expect, beforeEach } from '@jest/globals';
+import { describe, it, beforeEach } from 'node:test';
+import assert from 'node:assert/strict';
 import { createEntityManager } from '../src/EntityManager.js';
 
 describe('EntityManager', () => {
@@ -12,78 +13,78 @@ describe('EntityManager', () => {
   });
 
   describe('createEntity / destroyEntity', () => {
-    test('creates entities with incrementing ids', () => {
+    it('creates entities with incrementing ids', () => {
       const a = em.createEntity();
       const b = em.createEntity();
-      expect(b).toBe(a + 1);
+      assert.equal(b, a + 1);
     });
 
-    test('destroyEntity removes entity', () => {
+    it('destroyEntity removes entity', () => {
       const id = em.createEntity();
       em.addComponent(id, Position, { x: 0, y: 0 });
       em.destroyEntity(id);
-      expect(em.getAllEntities()).toEqual([]);
-      expect(em.getComponent(id, Position)).toBeUndefined();
+      assert.deepEqual(em.getAllEntities(), []);
+      assert.equal(em.getComponent(id, Position), undefined);
     });
   });
 
   describe('addComponent / getComponent / hasComponent', () => {
-    test('adds and retrieves a component', () => {
+    it('adds and retrieves a component', () => {
       const id = em.createEntity();
       em.addComponent(id, Position, { x: 1, y: 2 });
-      expect(em.getComponent(id, Position)).toEqual({ x: 1, y: 2 });
-      expect(em.hasComponent(id, Position)).toBe(true);
+      assert.deepEqual(em.getComponent(id, Position), { x: 1, y: 2 });
+      assert.equal(em.hasComponent(id, Position), true);
     });
 
-    test('returns undefined for missing component', () => {
+    it('returns undefined for missing component', () => {
       const id = em.createEntity();
-      expect(em.getComponent(id, Position)).toBeUndefined();
-      expect(em.hasComponent(id, Position)).toBe(false);
+      assert.equal(em.getComponent(id, Position), undefined);
+      assert.equal(em.hasComponent(id, Position), false);
     });
 
-    test('overwrites component data on duplicate add', () => {
+    it('overwrites component data on duplicate add', () => {
       const id = em.createEntity();
       em.addComponent(id, Position, { x: 1, y: 2 });
       em.addComponent(id, Position, { x: 10, y: 20 });
-      expect(em.getComponent(id, Position)).toEqual({ x: 10, y: 20 });
+      assert.deepEqual(em.getComponent(id, Position), { x: 10, y: 20 });
     });
 
-    test('adds multiple component types', () => {
+    it('adds multiple component types', () => {
       const id = em.createEntity();
       em.addComponent(id, Position, { x: 0, y: 0 });
       em.addComponent(id, Velocity, { vx: 1, vy: 1 });
-      expect(em.getComponent(id, Position)).toEqual({ x: 0, y: 0 });
-      expect(em.getComponent(id, Velocity)).toEqual({ vx: 1, vy: 1 });
+      assert.deepEqual(em.getComponent(id, Position), { x: 0, y: 0 });
+      assert.deepEqual(em.getComponent(id, Velocity), { vx: 1, vy: 1 });
     });
   });
 
   describe('removeComponent', () => {
-    test('removes a component', () => {
+    it('removes a component', () => {
       const id = em.createEntity();
       em.addComponent(id, Position, { x: 1, y: 2 });
       em.addComponent(id, Velocity, { vx: 1, vy: 1 });
       em.removeComponent(id, Position);
-      expect(em.hasComponent(id, Position)).toBe(false);
-      expect(em.hasComponent(id, Velocity)).toBe(true);
+      assert.equal(em.hasComponent(id, Position), false);
+      assert.equal(em.hasComponent(id, Velocity), true);
     });
 
-    test('removing last component leaves entity alive but without archetype', () => {
+    it('removing last component leaves entity alive but without archetype', () => {
       const id = em.createEntity();
       em.addComponent(id, Position, { x: 1, y: 2 });
       em.removeComponent(id, Position);
-      expect(em.getAllEntities()).toContain(id);
-      expect(em.hasComponent(id, Position)).toBe(false);
+      assert.ok(em.getAllEntities().includes(id));
+      assert.equal(em.hasComponent(id, Position), false);
     });
 
-    test('removing non-existent component is a no-op', () => {
+    it('removing non-existent component is a no-op', () => {
       const id = em.createEntity();
-      em.removeComponent(id, Position); // no-op
-      expect(em.getAllEntities()).toContain(id);
+      em.removeComponent(id, Position);
+      assert.ok(em.getAllEntities().includes(id));
     });
   });
 
   describe('query', () => {
-    test('returns entities matching component types', () => {
+    it('returns entities matching component types', () => {
       const a = em.createEntity();
       em.addComponent(a, Position, { x: 0, y: 0 });
       em.addComponent(a, Velocity, { vx: 1, vy: 1 });
@@ -92,11 +93,11 @@ describe('EntityManager', () => {
       em.addComponent(b, Position, { x: 5, y: 5 });
 
       const result = em.query([Position, Velocity]);
-      expect(result).toContain(a);
-      expect(result).not.toContain(b);
+      assert.ok(result.includes(a));
+      assert.ok(!result.includes(b));
     });
 
-    test('exclude types filters out entities', () => {
+    it('exclude types filters out entities', () => {
       const a = em.createEntity();
       em.addComponent(a, Position, { x: 0, y: 0 });
 
@@ -105,25 +106,25 @@ describe('EntityManager', () => {
       em.addComponent(b, Health, { hp: 100 });
 
       const result = em.query([Position], [Health]);
-      expect(result).toContain(a);
-      expect(result).not.toContain(b);
+      assert.ok(result.includes(a));
+      assert.ok(!result.includes(b));
     });
   });
 
   describe('createEntityWith', () => {
-    test('creates entity with multiple components at once', () => {
+    it('creates entity with multiple components at once', () => {
       const map = new Map();
       map.set(Position, { x: 3, y: 4 });
       map.set(Velocity, { vx: 1, vy: 0 });
 
       const id = em.createEntityWith(map);
-      expect(em.getComponent(id, Position)).toEqual({ x: 3, y: 4 });
-      expect(em.getComponent(id, Velocity)).toEqual({ vx: 1, vy: 0 });
+      assert.deepEqual(em.getComponent(id, Position), { x: 3, y: 4 });
+      assert.deepEqual(em.getComponent(id, Velocity), { vx: 1, vy: 0 });
     });
   });
 
   describe('count', () => {
-    test('counts entities matching query', () => {
+    it('counts entities matching query', () => {
       const a = em.createEntity();
       em.addComponent(a, Position, { x: 0, y: 0 });
 
@@ -131,8 +132,8 @@ describe('EntityManager', () => {
       em.addComponent(b, Position, { x: 1, y: 1 });
       em.addComponent(b, Velocity, { vx: 1, vy: 0 });
 
-      expect(em.count([Position])).toBe(2);
-      expect(em.count([Position, Velocity])).toBe(1);
+      assert.equal(em.count([Position]), 2);
+      assert.equal(em.count([Position, Velocity]), 1);
     });
   });
 
@@ -146,7 +147,7 @@ describe('EntityManager', () => {
       Position, Velocity, Health
     };
 
-    test('round-trips entities and components', () => {
+    it('round-trips entities and components', () => {
       const a = em.createEntity();
       em.addComponent(a, Position, { x: 1, y: 2 });
       em.addComponent(a, Velocity, { vx: 3, vy: 4 });
@@ -157,23 +158,23 @@ describe('EntityManager', () => {
       const data = em.serialize(symbolToName);
       em.deserialize(data, nameToSymbol);
 
-      expect(em.getAllEntities().sort()).toEqual([a, b].sort());
-      expect(em.getComponent(a, Position)).toEqual({ x: 1, y: 2 });
-      expect(em.getComponent(a, Velocity)).toEqual({ vx: 3, vy: 4 });
-      expect(em.getComponent(b, Position)).toEqual({ x: 5, y: 6 });
+      assert.deepEqual(em.getAllEntities().sort(), [a, b].sort());
+      assert.deepEqual(em.getComponent(a, Position), { x: 1, y: 2 });
+      assert.deepEqual(em.getComponent(a, Velocity), { vx: 3, vy: 4 });
+      assert.deepEqual(em.getComponent(b, Position), { x: 5, y: 6 });
     });
 
-    test('strip components excludes component data but keeps entity', () => {
+    it('strip components excludes component data but keeps entity', () => {
       const a = em.createEntity();
       em.addComponent(a, Position, { x: 1, y: 2 });
       em.addComponent(a, Velocity, { vx: 3, vy: 4 });
 
       const data = em.serialize(symbolToName, [Velocity]);
-      expect(data.components['Velocity']).toBeUndefined();
-      expect(data.components['Position']).toBeDefined();
+      assert.equal(data.components['Velocity'], undefined);
+      assert.notEqual(data.components['Position'], undefined);
     });
 
-    test('skip entities with component excludes entire entity', () => {
+    it('skip entities with component excludes entire entity', () => {
       const a = em.createEntity();
       em.addComponent(a, Position, { x: 1, y: 2 });
 
@@ -182,11 +183,11 @@ describe('EntityManager', () => {
       em.addComponent(b, Health, { hp: 100 });
 
       const data = em.serialize(symbolToName, [], [Health]);
-      expect(data.entities).toContain(a);
-      expect(data.entities).not.toContain(b);
+      assert.ok(data.entities.includes(a));
+      assert.ok(!data.entities.includes(b));
     });
 
-    test('custom serializers are used when provided', () => {
+    it('custom serializers are used when provided', () => {
       const a = em.createEntity();
       em.addComponent(a, Position, { x: 1, y: 2, _internal: 'secret' });
 
@@ -195,11 +196,11 @@ describe('EntityManager', () => {
       ]);
 
       const result = em.serialize(symbolToName, [], [], { serializers });
-      expect(result.components['Position'][a]).toEqual({ x: 1, y: 2 });
-      expect(result.components['Position'][a]._internal).toBeUndefined();
+      assert.deepEqual(result.components['Position'][a], { x: 1, y: 2 });
+      assert.equal(result.components['Position'][a]._internal, undefined);
     });
 
-    test('custom deserializers are used when provided', () => {
+    it('custom deserializers are used when provided', () => {
       const a = em.createEntity();
       em.addComponent(a, Position, { x: 1, y: 2 });
 
@@ -210,15 +211,15 @@ describe('EntityManager', () => {
       ]);
 
       em.deserialize(data, nameToSymbol, { deserializers });
-      expect(em.getComponent(a, Position)).toEqual({ x: 1, y: 2, restored: true });
+      assert.deepEqual(em.getComponent(a, Position), { x: 1, y: 2, restored: true });
     });
 
-    test('deserialize clears previous state', () => {
+    it('deserialize clears previous state', () => {
       const a = em.createEntity();
       em.addComponent(a, Position, { x: 1, y: 2 });
 
       em.deserialize({ nextId: 1, entities: [], components: {} }, nameToSymbol);
-      expect(em.getAllEntities()).toEqual([]);
+      assert.deepEqual(em.getAllEntities(), []);
     });
   });
 });

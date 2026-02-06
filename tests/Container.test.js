@@ -1,14 +1,15 @@
-import { describe, test, expect } from '@jest/globals';
+import { describe, it } from 'node:test';
+import assert from 'node:assert/strict';
 import { createContainer } from '../src/Container.js';
 
 describe('Container', () => {
-  test('register and resolve returns factory result', () => {
+  it('register and resolve returns factory result', () => {
     const container = createContainer();
     container.register('greeting', () => 'hello');
-    expect(container.resolve('greeting')).toBe('hello');
+    assert.equal(container.resolve('greeting'), 'hello');
   });
 
-  test('singleton caching — resolves same instance', () => {
+  it('singleton caching — resolves same instance', () => {
     const container = createContainer();
     let callCount = 0;
     container.register('service', () => {
@@ -17,22 +18,24 @@ describe('Container', () => {
     });
     const a = container.resolve('service');
     const b = container.resolve('service');
-    expect(a).toBe(b);
-    expect(callCount).toBe(1);
+    assert.equal(a, b);
+    assert.equal(callCount, 1);
   });
 
-  test('factory receives container for dependency injection', () => {
+  it('factory receives container for dependency injection', () => {
     const container = createContainer();
     container.register('config', () => ({ port: 3000 }));
     container.register('server', (c) => {
       const config = c.resolve('config');
       return { port: config.port };
     });
-    expect(container.resolve('server')).toEqual({ port: 3000 });
+    assert.deepEqual(container.resolve('server'), { port: 3000 });
   });
 
-  test('throws for unregistered key', () => {
+  it('throws for unregistered key', () => {
     const container = createContainer();
-    expect(() => container.resolve('missing')).toThrow('No factory registered for key: missing');
+    assert.throws(() => container.resolve('missing'), {
+      message: 'No factory registered for key: missing'
+    });
   });
 });

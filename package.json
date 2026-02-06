@@ -1,6 +1,6 @@
 {
   "name": "archetype-ecs",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "description": "Lightweight archetype-based Entity Component System",
   "type": "module",
   "main": "src/index.js",
@@ -9,12 +9,8 @@
     ".": "./src/index.js"
   },
   "scripts": {
-    "test": "node --experimental-vm-modules node_modules/.bin/jest"
+    "test": "node --test tests/"
   },
   "keywords": ["ecs", "entity", "component", "system", "archetype", "gamedev"],
-  "license": "MIT",
-  "devDependencies": {
-    "jest": "^29.7.0",
-    "@jest/globals": "^29.7.0"
-  }
+  "license": "MIT"
 }
