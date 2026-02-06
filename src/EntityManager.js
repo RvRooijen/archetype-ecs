@@ -15,7 +15,11 @@ function growSoAStore(store, newCapacity) {
   for (const [field, Ctor] of Object.entries(store._schema)) {
     const old = store[field];
     store[field] = new Ctor(newCapacity);
-    store[field].set(old);
+    if (Ctor === Array) {
+      for (let i = 0; i < old.length; i++) store[field][i] = old[i];
+    } else {
+      store[field].set(old);
+    }
   }
 }
 
@@ -91,11 +95,7 @@ export function createEntityManager() {
       };
       for (const t of types) {
         const schema = componentSchemas.get(t);
-        if (schema) {
-          arch.components.set(t, createSoAStore(schema, INITIAL_CAPACITY));
-        } else {
-          arch.components.set(t, []);
-        }
+        arch.components.set(t, schema ? createSoAStore(schema, INITIAL_CAPACITY) : null);
       }
       archetypes.set(key, arch);
       queryCacheVersion++;
@@ -108,9 +108,7 @@ export function createEntityManager() {
     const newCap = arch.capacity * 2;
     arch.capacity = newCap;
     for (const [type, store] of arch.components) {
-      if (store[TYPED]) {
-        growSoAStore(store, newCap);
-      }
+      if (store) growSoAStore(store, newCap);
     }
   }
 
@@ -120,11 +118,7 @@ export function createEntityManager() {
     arch.entityIds[idx] = entityId;
     for (const t of arch.types) {
       const store = arch.components.get(t);
-      if (store[TYPED]) {
-        soaWrite(store, idx, componentMap[t]);
-      } else {
-        store[idx] = componentMap[t];
-      }
+      if (store) soaWrite(store, idx, componentMap[t]);
     }
     arch.entityToIndex.set(entityId, idx);
     arch.count++;
@@ -136,26 +130,15 @@ export function createEntityManager() {
     const lastIdx = arch.count - 1;
 
     if (idx !== lastIdx) {
-      // Swap with last
       const lastEntity = arch.entityIds[lastIdx];
       arch.entityIds[idx] = lastEntity;
       for (const [type, store] of arch.components) {
-        if (store[TYPED]) {
-          soaSwap(store, idx, lastIdx);
-        } else {
-          store[idx] = store[lastIdx];
-        }
+        if (store) soaSwap(store, idx, lastIdx);
       }
       arch.entityToIndex.set(lastEntity, idx);
     }
 
-    // Pop last
     arch.entityIds.length = lastIdx;
-    for (const [type, store] of arch.components) {
-      if (!store[TYPED]) {
-        store.length = lastIdx;
-      }
-    }
     arch.entityToIndex.delete(entityId);
     arch.count--;
     entityArchetype.delete(entityId);
@@ -164,10 +147,7 @@ export function createEntityManager() {
   function readComponentData(arch, type, idx) {
     const store = arch.components.get(type);
     if (!store) return undefined;
-    if (store[TYPED]) {
-      return soaRead(store, idx);
-    }
-    return store[idx];
+    return soaRead(store, idx);
   }
 
   function getMatchingArchetypes(types, excludeTypes) {
@@ -218,12 +198,10 @@ export function createEntityManager() {
       }
 
       if (arch.types.has(type)) {
-        const idx = arch.entityToIndex.get(entityId);
         const store = arch.components.get(type);
-        if (store[TYPED]) {
+        if (store) {
+          const idx = arch.entityToIndex.get(entityId);
           soaWrite(store, idx, data);
-        } else {
-          store[idx] = data;
         }
         return;
       }
@@ -282,10 +260,7 @@ export function createEntityManager() {
       const store = arch.components.get(fieldRef._sym);
       if (!store) return undefined;
       const idx = arch.entityToIndex.get(entityId);
-      if (store[TYPED]) {
-        return store[fieldRef._field][idx];
-      }
-      return store[idx][fieldRef._field];
+      return store[fieldRef._field][idx];
     },
 
     set(entityId, fieldRef, value) {
@@ -294,11 +269,7 @@ export function createEntityManager() {
       const store = arch.components.get(fieldRef._sym);
       if (!store) return;
       const idx = arch.entityToIndex.get(entityId);
-      if (store[TYPED]) {
-        store[fieldRef._field][idx] = value;
-      } else {
-        store[idx][fieldRef._field] = value;
-      }
+      store[fieldRef._field][idx] = value;
     },
 
     hasComponent(entityId, comp) {
@@ -360,10 +331,9 @@ export function createEntityManager() {
           count: arch.count,
           field(ref) {
             const sym = ref._sym || ref;
-            const fieldName = ref._field;
             const store = arch.components.get(sym);
-            if (!store || !store[TYPED]) return undefined;
-            return store[fieldName];
+            if (!store) return undefined;
+            return store[ref._field];
           }
         };
         callback(view);
@@ -392,6 +362,7 @@ export function createEntityManager() {
 
       for (const arch of archetypes.values()) {
         for (const [sym, store] of arch.components) {
+          if (!store) continue;
           if (stripSymbols.has(sym) || skipSymbols.has(sym)) continue;
           const name = symbolToName.get(sym);
           if (!name) continue;
@@ -402,17 +373,12 @@ export function createEntityManager() {
           const entries = serializedComponents[name];
 
           const customSerializer = serializers && serializers.get(name);
-          const isTyped = store[TYPED];
 
           for (let i = 0; i < arch.count; i++) {
             const entityId = arch.entityIds[i];
             if (skipEntityIds.has(entityId)) continue;
-            const value = isTyped ? soaRead(store, i) : store[i];
-            if (customSerializer) {
-              entries[entityId] = customSerializer(value);
-            } else {
-              entries[entityId] = isTyped ? value : structuredClone(value);
-            }
+            const value = soaRead(store, i);
+            entries[entityId] = customSerializer ? customSerializer(value) : value;
           }
         }
       }

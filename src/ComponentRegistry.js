@@ -9,6 +9,7 @@ export const TYPE_MAP = {
   'u8': Uint8Array,
   'u16': Uint16Array,
   'u32': Uint32Array,
+  'string': Array,
 };
 
 /** @type {Map<symbol, Record<string, typeof Float32Array>>} */

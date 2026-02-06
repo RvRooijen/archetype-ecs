@@ -2,17 +2,19 @@
 export type EntityId = number;
 
 // === Field reference descriptor ===
-export interface FieldRef {
+export interface FieldRef<V = number> {
   readonly _sym: symbol;
   readonly _field: string;
 }
 
 // === Component definition ===
+declare const __phantom: unique symbol;
 export type ComponentDef<T = unknown> = {
   readonly _sym: symbol;
   readonly _name: string;
-} & (T extends Record<string, number>
-  ? { readonly [K in keyof T & string]: FieldRef }
+  readonly [__phantom]?: T;
+} & (T extends Record<string, number | string>
+  ? { readonly [K in keyof T & string]: FieldRef<T[K]> }
   : {});
 
 /** @deprecated Use ComponentDef<T> instead */
@@ -20,16 +22,19 @@ export type Component<T = unknown> = ComponentDef<T>;
 export type ComponentType = ComponentDef;
 
 // === TypedArray schema ===
-export type TypedArrayType = 'f32' | 'f64' | 'i8' | 'i16' | 'i32' | 'u8' | 'u16' | 'u32';
+export type TypedArrayType = 'f32' | 'f64' | 'i8' | 'i16' | 'i32' | 'u8' | 'u16' | 'u32' | 'string';
 
 export type Schema = Record<string, TypedArrayType>;
 
-/** Maps a schema definition to its runtime value type (all numeric fields → number) */
-type SchemaToType<S extends Schema> = { [K in keyof S]: number };
+/** Maps a schema type to its runtime value type */
+type FieldToType<T extends TypedArrayType> = T extends 'string' ? string : number;
+
+/** Maps a schema definition to its runtime value type */
+type SchemaToType<S extends Schema> = { [K in keyof S]: FieldToType<S[K]> };
 
 export declare const TYPED: unique symbol;
 
-export declare const componentSchemas: Map<symbol, Record<string, Float32ArrayConstructor | Float64ArrayConstructor | Int8ArrayConstructor | Int16ArrayConstructor | Int32ArrayConstructor | Uint8ArrayConstructor | Uint16ArrayConstructor | Uint32ArrayConstructor>>;
+export declare const componentSchemas: Map<symbol, Record<string, Float32ArrayConstructor | Float64ArrayConstructor | Int8ArrayConstructor | Int16ArrayConstructor | Int32ArrayConstructor | Uint8ArrayConstructor | Uint16ArrayConstructor | Uint32ArrayConstructor | ArrayConstructor>>;
 
 // === TypedArray union ===
 type TypedArray = Float32Array | Float64Array | Int8Array | Int16Array | Int32Array | Uint8Array | Uint16Array | Uint32Array;
@@ -38,7 +43,7 @@ type TypedArray = Float32Array | Float64Array | Int8Array | Int16Array | Int32Ar
 export interface ArchetypeView {
   readonly entityIds: EntityId[];
   readonly count: number;
-  field(ref: FieldRef): TypedArray | undefined;
+  field(ref: FieldRef<any>): TypedArray | unknown[] | undefined;
 }
 
 // === Serialize/Deserialize ===
@@ -63,8 +68,8 @@ export interface EntityManager {
   addComponent<T>(entityId: EntityId, type: ComponentDef<T>, data: T): void;
   removeComponent(entityId: EntityId, type: ComponentDef): void;
   getComponent<T>(entityId: EntityId, type: ComponentDef<T>): T | undefined;
-  get(entityId: EntityId, fieldRef: FieldRef): number | undefined;
-  set(entityId: EntityId, fieldRef: FieldRef, value: number): void;
+  get<V>(entityId: EntityId, fieldRef: FieldRef<V>): V | undefined;
+  set<V>(entityId: EntityId, fieldRef: FieldRef<V>, value: V): void;
   hasComponent(entityId: EntityId, type: ComponentDef): boolean;
   query(include: ComponentDef[], exclude?: ComponentDef[]): EntityId[];
   getAllEntities(): EntityId[];
@@ -101,6 +106,6 @@ export interface Profiler {
 // === Exports ===
 export function createEntityManager(): EntityManager;
 export function component(name: string): ComponentDef;
-export function component<F extends string>(name: string, type: TypedArrayType, fields: F[]): ComponentDef<Record<F, number>>;
+export function component<T extends TypedArrayType, F extends string>(name: string, type: T, fields: F[]): ComponentDef<Record<F, FieldToType<T>>>;
 export function component<S extends Schema>(name: string, schema: S): ComponentDef<SchemaToType<S>>;
 export const profiler: Profiler;
