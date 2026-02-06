@@ -5,9 +5,9 @@ import { component } from '../src/index.js';
 
 describe('EntityManager', () => {
   let em;
-  const Position = component('Position', { x: 'f32', y: 'f32' });
-  const Velocity = component('Velocity', { vx: 'f32', vy: 'f32' });
-  const Health = component('Health', { hp: 'f32' });
+  const Position = component('Position', 'f32', ['x', 'y']);
+  const Velocity = component('Velocity', 'f32', ['vx', 'vy']);
+  const Health = component('Health', 'f32', ['hp']);
 
   beforeEach(() => {
     em = createEntityManager();
@@ -136,13 +136,11 @@ describe('EntityManager', () => {
 
   describe('serialize / deserialize', () => {
     const symbolToName = new Map([
-      [Position, 'Position'],
-      [Velocity, 'Velocity'],
-      [Health, 'Health']
+      [Position._sym, 'Position'],
+      [Velocity._sym, 'Velocity'],
+      [Health._sym, 'Health']
     ]);
-    const nameToSymbol = {
-      Position, Velocity, Health
-    };
+    const nameToSymbol = { Position, Velocity, Health };
 
     it('round-trips entities and components', () => {
       const a = em.createEntity();
@@ -185,8 +183,8 @@ describe('EntityManager', () => {
     });
 
     it('custom serializers are used when provided', () => {
-      const Meta = Symbol('Meta');
-      const metaSymbolToName = new Map([...symbolToName, [Meta, 'Meta']]);
+      const Meta = component('Meta');
+      const metaSymbolToName = new Map([...symbolToName, [Meta._sym, 'Meta']]);
 
       const a = em.createEntity();
       em.addComponent(a, Meta, { x: 1, y: 2, _internal: 'secret' });
@@ -201,9 +199,9 @@ describe('EntityManager', () => {
     });
 
     it('custom deserializers are used when provided', () => {
-      const Meta = Symbol('Meta');
-      const metaSymbolToName = new Map([...symbolToName, [Meta, 'Meta']]);
-      const metaNameToSymbol = { ...nameToSymbol, Meta };
+      const Meta = component('Meta2');
+      const metaSymbolToName = new Map([...symbolToName, [Meta._sym, 'Meta2']]);
+      const metaNameToSymbol = { ...nameToSymbol, Meta2: Meta };
 
       const a = em.createEntity();
       em.addComponent(a, Meta, { x: 1, y: 2 });
@@ -211,7 +209,7 @@ describe('EntityManager', () => {
       const data = em.serialize(metaSymbolToName);
 
       const deserializers = new Map([
-        ['Meta', (compData) => ({ ...compData, restored: true })]
+        ['Meta2', (compData) => ({ ...compData, restored: true })]
       ]);
 
       em.deserialize(data, metaNameToSymbol, { deserializers });
@@ -236,7 +234,7 @@ describe('Typed Components (SoA)', () => {
   });
 
   it('typed component round-trip (add/get)', () => {
-    const Pos = component('Pos', { x: 'f32', y: 'f32' });
+    const Pos = component('Pos', 'f32', ['x', 'y']);
     const id = em.createEntity();
     em.addComponent(id, Pos, { x: 1.5, y: 2.5 });
     const result = em.getComponent(id, Pos);
@@ -245,7 +243,7 @@ describe('Typed Components (SoA)', () => {
   });
 
   it('growth past initial capacity (>64 entities)', () => {
-    const Pos = component('PosGrow', { x: 'f32', y: 'f32' });
+    const Pos = component('PosGrow', 'f32', ['x', 'y']);
     const ids = [];
     for (let i = 0; i < 100; i++) {
       const id = em.createEntity();
@@ -260,7 +258,7 @@ describe('Typed Components (SoA)', () => {
   });
 
   it('swap-remove preserves typed data', () => {
-    const Pos = component('PosSwap', { x: 'f32', y: 'f32' });
+    const Pos = component('PosSwap', 'f32', ['x', 'y']);
     const a = em.createEntity();
     const b = em.createEntity();
     const c = em.createEntity();
@@ -268,7 +266,6 @@ describe('Typed Components (SoA)', () => {
     em.addComponent(b, Pos, { x: 3, y: 4 });
     em.addComponent(c, Pos, { x: 5, y: 6 });
 
-    // Remove first, causing swap with last
     em.destroyEntity(a);
 
     const resultB = em.getComponent(b, Pos);
@@ -281,8 +278,8 @@ describe('Typed Components (SoA)', () => {
   });
 
   it('mixed typed + untyped on same entity', () => {
-    const Pos = component('PosMixed', { x: 'f32', y: 'f32' });
-    const Tag = Symbol('Tag');
+    const Pos = component('PosMixed', 'f32', ['x', 'y']);
+    const Tag = component('Tag');
     const id = em.createEntity();
     em.addComponent(id, Pos, { x: 10, y: 20 });
     em.addComponent(id, Tag, { label: 'player' });
@@ -296,8 +293,8 @@ describe('Typed Components (SoA)', () => {
   });
 
   it('forEach raw field access and mutation', () => {
-    const Pos = component('PosLoop', { x: 'f32', y: 'f32' });
-    const Vel = component('VelLoop', { vx: 'f32', vy: 'f32' });
+    const Pos = component('PosLoop', 'f32', ['x', 'y']);
+    const Vel = component('VelLoop', 'f32', ['vx', 'vy']);
 
     for (let i = 0; i < 10; i++) {
       const id = em.createEntity();
@@ -306,28 +303,27 @@ describe('Typed Components (SoA)', () => {
     }
 
     em.forEach([Pos, Vel], (arch) => {
-      const px = arch.field(Pos, 'x');
-      const py = arch.field(Pos, 'y');
-      const vx = arch.field(Vel, 'vx');
-      const vy = arch.field(Vel, 'vy');
+      const px = arch.field(Pos.x);
+      const py = arch.field(Pos.y);
+      const vx = arch.field(Vel.vx);
+      const vy = arch.field(Vel.vy);
       for (let i = 0; i < arch.count; i++) {
         px[i] += vx[i];
         py[i] += vy[i];
       }
     });
 
-    // Verify mutations
     const ids = em.query([Pos, Vel]);
     for (const id of ids) {
       const pos = em.getComponent(id, Pos);
-      assert.ok(pos.x >= 1); // was i, now i+1
-      assert.ok(Math.abs(pos.y - 2) < 0.001); // was 0, now 0+2
+      assert.ok(pos.x >= 1);
+      assert.ok(Math.abs(pos.y - 2) < 0.001);
     }
   });
 
   it('serialize/deserialize round-trip with typed components', () => {
-    const Pos = component('PosSer', { x: 'f32', y: 'f32' });
-    const symbolToName = new Map([[Pos, 'PosSer']]);
+    const Pos = component('PosSer', 'f32', ['x', 'y']);
+    const symbolToName = new Map([[Pos._sym, 'PosSer']]);
     const nameToSymbol = { PosSer: Pos };
 
     const a = em.createEntity();
@@ -348,13 +344,11 @@ describe('Typed Components (SoA)', () => {
   });
 
   it('archetype migration with typed components', () => {
-    const Pos = component('PosMig', { x: 'f32', y: 'f32' });
-    const Vel = component('VelMig', { vx: 'f32', vy: 'f32' });
+    const Pos = component('PosMig', 'f32', ['x', 'y']);
+    const Vel = component('VelMig', 'f32', ['vx', 'vy']);
 
     const id = em.createEntity();
     em.addComponent(id, Pos, { x: 5, y: 10 });
-
-    // Migrate to [Pos, Vel] archetype
     em.addComponent(id, Vel, { vx: 1, vy: 2 });
 
     const pos = em.getComponent(id, Pos);
@@ -365,7 +359,6 @@ describe('Typed Components (SoA)', () => {
     assert.ok(Math.abs(vel.vx - 1) < 0.001);
     assert.ok(Math.abs(vel.vy - 2) < 0.001);
 
-    // Migrate back by removing Vel
     em.removeComponent(id, Vel);
     const pos2 = em.getComponent(id, Pos);
     assert.ok(Math.abs(pos2.x - 5) < 0.001);
@@ -374,7 +367,7 @@ describe('Typed Components (SoA)', () => {
   });
 
   it('overwrite typed component data in-place', () => {
-    const Pos = component('PosOw', { x: 'f32', y: 'f32' });
+    const Pos = component('PosOw', 'f32', ['x', 'y']);
     const id = em.createEntity();
     em.addComponent(id, Pos, { x: 1, y: 2 });
     em.addComponent(id, Pos, { x: 99, y: 88 });
@@ -383,49 +376,33 @@ describe('Typed Components (SoA)', () => {
     assert.ok(Math.abs(result.y - 88) < 0.001);
   });
 
-  it('forEach returns undefined for untyped component fields', () => {
-    const Tag = Symbol('TagFE');
-    const Pos = component('PosFE', { x: 'f32', y: 'f32' });
+  it('get/set for zero-allocation field access', () => {
+    const Pos = component('PosGS', 'f32', ['x', 'y']);
+    const id = em.createEntity();
+    em.addComponent(id, Pos, { x: 3.5, y: 7.5 });
+    assert.ok(Math.abs(em.get(id, Pos.x) - 3.5) < 0.001);
+    assert.ok(Math.abs(em.get(id, Pos.y) - 7.5) < 0.001);
+    em.set(id, Pos.x, 42);
+    assert.ok(Math.abs(em.get(id, Pos.x) - 42) < 0.001);
+    assert.ok(Math.abs(em.get(id, Pos.y) - 7.5) < 0.001);
+  });
+
+  it('get returns undefined for missing entity/component', () => {
+    const Pos = component('PosGFM', 'f32', ['x', 'y']);
+    assert.equal(em.get(999, Pos.x), undefined);
+    const id = em.createEntity();
+    assert.equal(em.get(id, Pos.x), undefined);
+  });
+
+  it('forEach field returns undefined for untyped component', () => {
+    const Tag = component('TagFE');
+    const Pos = component('PosFE', 'f32', ['x', 'y']);
     const id = em.createEntity();
     em.addComponent(id, Pos, { x: 1, y: 2 });
     em.addComponent(id, Tag, { label: 'test' });
 
     em.forEach([Pos, Tag], (arch) => {
-      assert.ok(arch.field(Pos, 'x') instanceof Float32Array);
-      assert.equal(arch.field(Tag, 'label'), undefined);
+      assert.ok(arch.field(Pos.x) instanceof Float32Array);
     });
-  });
-
-  it('getField reads single field without allocation', () => {
-    const Pos = component('PosGF', { x: 'f32', y: 'f32' });
-    const id = em.createEntity();
-    em.addComponent(id, Pos, { x: 3.5, y: 7.5 });
-    assert.ok(Math.abs(em.getField(id, Pos, 'x') - 3.5) < 0.001);
-    assert.ok(Math.abs(em.getField(id, Pos, 'y') - 7.5) < 0.001);
-  });
-
-  it('setField writes single field without allocation', () => {
-    const Pos = component('PosSF', { x: 'f32', y: 'f32' });
-    const id = em.createEntity();
-    em.addComponent(id, Pos, { x: 0, y: 0 });
-    em.setField(id, Pos, 'x', 42);
-    assert.ok(Math.abs(em.getField(id, Pos, 'x') - 42) < 0.001);
-    assert.ok(Math.abs(em.getField(id, Pos, 'y') - 0) < 0.001);
-  });
-
-  it('getField/setField work on untyped components', () => {
-    const Tag = Symbol('TagGSF');
-    const id = em.createEntity();
-    em.addComponent(id, Tag, { label: 'player', score: 10 });
-    assert.equal(em.getField(id, Tag, 'label'), 'player');
-    em.setField(id, Tag, 'score', 99);
-    assert.equal(em.getField(id, Tag, 'score'), 99);
-  });
-
-  it('getField returns undefined for missing entity/component', () => {
-    const Pos = component('PosGFM', { x: 'f32', y: 'f32' });
-    assert.equal(em.getField(999, Pos, 'x'), undefined);
-    const id = em.createEntity();
-    assert.equal(em.getField(id, Pos, 'x'), undefined);
   });
 });

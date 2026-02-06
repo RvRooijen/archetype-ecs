@@ -1,4 +1,4 @@
-import { TYPED, componentSchemas } from './ComponentRegistry.js';
+import { TYPED, componentSchemas, toSym } from './ComponentRegistry.js';
 
 const INITIAL_CAPACITY = 64;
 
@@ -51,10 +51,11 @@ export function createEntityManager() {
   let nextBitIndex = 0;
 
   function getBit(type) {
-    let bit = componentBitIndex.get(type);
+    const sym = toSym(type);
+    let bit = componentBitIndex.get(sym);
     if (bit === undefined) {
       bit = nextBitIndex++;
-      componentBitIndex.set(type, bit);
+      componentBitIndex.set(sym, bit);
     }
     return bit;
   }
@@ -206,20 +207,19 @@ export function createEntityManager() {
       allEntityIds.delete(id);
     },
 
-    addComponent(entityId, componentName, data) {
+    addComponent(entityId, comp, data) {
+      const type = toSym(comp);
       const arch = entityArchetype.get(entityId);
 
       if (!arch) {
-        // Entity has no archetype yet — create single-type archetype
-        const newArch = getOrCreateArchetype([componentName]);
-        addToArchetype(newArch, entityId, { [componentName]: data });
+        const newArch = getOrCreateArchetype([type]);
+        addToArchetype(newArch, entityId, { [type]: data });
         return;
       }
 
-      if (arch.types.has(componentName)) {
-        // Already has this component type — just update data
+      if (arch.types.has(type)) {
         const idx = arch.entityToIndex.get(entityId);
-        const store = arch.components.get(componentName);
+        const store = arch.components.get(type);
         if (store[TYPED]) {
           soaWrite(store, idx, data);
         } else {
@@ -228,13 +228,11 @@ export function createEntityManager() {
         return;
       }
 
-      // Need to move to a new archetype with the extra type
-      const newTypes = [...arch.types, componentName];
+      const newTypes = [...arch.types, type];
       const newArch = getOrCreateArchetype(newTypes);
 
-      // Collect component data from old archetype
       const idx = arch.entityToIndex.get(entityId);
-      const map = { [componentName]: data };
+      const map = { [type]: data };
       for (const t of arch.types) {
         map[t] = readComponentData(arch, t, idx);
       }
@@ -243,19 +241,19 @@ export function createEntityManager() {
       addToArchetype(newArch, entityId, map);
     },
 
-    removeComponent(entityId, componentName) {
+    removeComponent(entityId, comp) {
+      const type = toSym(comp);
       const arch = entityArchetype.get(entityId);
-      if (!arch || !arch.types.has(componentName)) return;
+      if (!arch || !arch.types.has(type)) return;
 
       if (arch.types.size === 1) {
-        // Removing last component — entity has no archetype
         removeFromArchetype(arch, entityId);
         return;
       }
 
       const newTypes = [];
       for (const t of arch.types) {
-        if (t !== componentName) newTypes.push(t);
+        if (t !== type) newTypes.push(t);
       }
       const newArch = getOrCreateArchetype(newTypes);
 
@@ -269,42 +267,44 @@ export function createEntityManager() {
       addToArchetype(newArch, entityId, map);
     },
 
-    getComponent(entityId, componentName) {
+    getComponent(entityId, comp) {
+      const type = toSym(comp);
       const arch = entityArchetype.get(entityId);
       if (!arch) return undefined;
       const idx = arch.entityToIndex.get(entityId);
       if (idx === undefined) return undefined;
-      return readComponentData(arch, componentName, idx);
+      return readComponentData(arch, type, idx);
     },
 
-    getField(entityId, componentName, field) {
+    get(entityId, fieldRef) {
       const arch = entityArchetype.get(entityId);
       if (!arch) return undefined;
-      const store = arch.components.get(componentName);
+      const store = arch.components.get(fieldRef._sym);
       if (!store) return undefined;
       const idx = arch.entityToIndex.get(entityId);
       if (store[TYPED]) {
-        return store[field][idx];
+        return store[fieldRef._field][idx];
       }
-      return store[idx][field];
+      return store[idx][fieldRef._field];
     },
 
-    setField(entityId, componentName, field, value) {
+    set(entityId, fieldRef, value) {
       const arch = entityArchetype.get(entityId);
       if (!arch) return;
-      const store = arch.components.get(componentName);
+      const store = arch.components.get(fieldRef._sym);
       if (!store) return;
       const idx = arch.entityToIndex.get(entityId);
       if (store[TYPED]) {
-        store[field][idx] = value;
+        store[fieldRef._field][idx] = value;
       } else {
-        store[idx][field] = value;
+        store[idx][fieldRef._field] = value;
       }
     },
 
-    hasComponent(entityId, componentName) {
+    hasComponent(entityId, comp) {
+      const type = toSym(comp);
       const arch = entityArchetype.get(entityId);
-      return arch ? arch.types.has(componentName) : false;
+      return arch ? arch.types.has(type) : false;
     },
 
     query(includeTypes, excludeTypes) {
@@ -331,8 +331,9 @@ export function createEntityManager() {
       const types = [];
       const map = {};
       for (let i = 0; i < args.length; i += 2) {
-        types.push(args[i]);
-        map[args[i]] = args[i + 1];
+        const sym = toSym(args[i]);
+        types.push(sym);
+        map[sym] = args[i + 1];
       }
       const arch = getOrCreateArchetype(types);
       addToArchetype(arch, id, map);
@@ -357,10 +358,12 @@ export function createEntityManager() {
         const view = {
           entityIds: arch.entityIds,
           count: arch.count,
-          field(type, name) {
-            const store = arch.components.get(type);
+          field(ref) {
+            const sym = ref._sym || ref;
+            const fieldName = ref._field;
+            const store = arch.components.get(sym);
             if (!store || !store[TYPED]) return undefined;
-            return store[name];
+            return store[fieldName];
           }
         };
         callback(view);
@@ -368,11 +371,10 @@ export function createEntityManager() {
     },
 
     serialize(symbolToName, stripComponents = [], skipEntitiesWith = [], { serializers } = {}) {
-      const stripSymbols = new Set(stripComponents);
-      const skipSymbols = new Set(skipEntitiesWith);
+      const stripSymbols = new Set(stripComponents.map(toSym));
+      const skipSymbols = new Set(skipEntitiesWith.map(toSym));
       const skipEntityIds = new Set();
 
-      // Find entities that have any "skip entity" component — these are fully excluded
       if (skipSymbols.size > 0) {
         for (const arch of archetypes.values()) {
           let hasSkip = false;
@@ -415,7 +417,6 @@ export function createEntityManager() {
         }
       }
 
-      // Remove empty component groups
       for (const name of Object.keys(serializedComponents)) {
         if (Object.keys(serializedComponents[name]).length === 0) {
           delete serializedComponents[name];
@@ -435,7 +436,6 @@ export function createEntityManager() {
     },
 
     deserialize(data, nameToSymbol, { deserializers } = {}) {
-      // Clear all state
       allEntityIds.clear();
       archetypes.clear();
       entityArchetype.clear();
@@ -444,7 +444,6 @@ export function createEntityManager() {
 
       nextId = data.nextId;
 
-      // Build per-entity component maps (plain objects with symbol keys)
       const entityComponents = new Map();
 
       for (const id of data.entities) {
@@ -453,8 +452,9 @@ export function createEntityManager() {
       }
 
       for (const [name, store] of Object.entries(data.components)) {
-        const sym = nameToSymbol[name];
-        if (!sym) continue;
+        const entry = nameToSymbol[name];
+        if (!entry) continue;
+        const sym = toSym(entry);
 
         const customDeserializer = deserializers && deserializers.get(name);
 
@@ -471,11 +471,10 @@ export function createEntityManager() {
         }
       }
 
-      // Group by archetype key and bulk-insert
       const groupedByKey = new Map();
       for (const [entityId, compMap] of entityComponents) {
         const types = Object.getOwnPropertySymbols(compMap);
-        if (types.length === 0) continue; // entity with no components
+        if (types.length === 0) continue;
 
         const key = computeMask(types);
         if (!groupedByKey.has(key)) {

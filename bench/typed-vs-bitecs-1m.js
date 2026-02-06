@@ -23,10 +23,10 @@ function benchArchetypeTyped() {
   const t0 = performance.now();
   for (let f = 0; f < FRAMES; f++) {
     em.forEach([Position, Velocity], (arch) => {
-      const px = arch.field(Position, 'x');
-      const py = arch.field(Position, 'y');
-      const vx = arch.field(Velocity, 'vx');
-      const vy = arch.field(Velocity, 'vy');
+      const px = arch.field(Position.x);
+      const py = arch.field(Position.y);
+      const vx = arch.field(Velocity.vx);
+      const vy = arch.field(Velocity.vy);
       for (let i = 0; i < arch.count; i++) {
         px[i] += vx[i];
         py[i] += vy[i];

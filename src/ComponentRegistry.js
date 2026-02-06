@@ -13,3 +13,8 @@ export const TYPE_MAP = {
 
 /** @type {Map<symbol, Record<string, typeof Float32Array>>} */
 export const componentSchemas = new Map();
+
+/** Extract the underlying symbol from a component object or pass through a plain symbol */
+export function toSym(type) {
+  return type._sym || type;
+}
