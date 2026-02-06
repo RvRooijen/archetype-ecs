@@ -13,7 +13,7 @@
     }
   },
   "scripts": {
-    "test": "node --test tests/"
+    "test": "node --test tests/ && npx tsc --noEmit"
   },
   "keywords": [
     "ecs",
