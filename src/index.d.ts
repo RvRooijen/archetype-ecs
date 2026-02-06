@@ -12,6 +12,9 @@ export type TypedArrayType = 'f32' | 'f64' | 'i8' | 'i16' | 'i32' | 'u8' | 'u16'
 
 export type Schema = Record<string, TypedArrayType>;
 
+/** Maps a schema definition to its runtime value type (all numeric fields → number) */
+type SchemaToType<S extends Schema> = { [K in keyof S]: number };
+
 export declare const TYPED: unique symbol;
 
 export declare const componentSchemas: Map<symbol, Record<string, Float32ArrayConstructor | Float64ArrayConstructor | Int8ArrayConstructor | Int16ArrayConstructor | Int32ArrayConstructor | Uint8ArrayConstructor | Uint16ArrayConstructor | Uint32ArrayConstructor>>;
@@ -31,7 +34,7 @@ export interface Archetype {
 export interface ArchetypeView {
   readonly entityIds: EntityId[];
   readonly count: number;
-  field(type: Component, name: string): Float32Array | Float64Array | Int8Array | Int16Array | Int32Array | Uint8Array | Uint16Array | Uint32Array | undefined;
+  field<T>(type: Component<T>, name: keyof T & string): Float32Array | Float64Array | Int8Array | Int16Array | Int32Array | Uint8Array | Uint16Array | Uint32Array | undefined;
 }
 
 // === Serialize/Deserialize ===
@@ -56,6 +59,8 @@ export interface EntityManager {
   addComponent<T>(entityId: EntityId, type: Component<T>, data: T): void;
   removeComponent(entityId: EntityId, type: Component): void;
   getComponent<T>(entityId: EntityId, type: Component<T>): T | undefined;
+  getField<T>(entityId: EntityId, type: Component<T>, field: keyof T & string): number | undefined;
+  setField<T>(entityId: EntityId, type: Component<T>, field: keyof T & string, value: number): void;
   hasComponent(entityId: EntityId, type: Component): boolean;
   query(include: Component[], exclude?: Component[]): EntityId[];
   getAllEntities(): EntityId[];
@@ -91,6 +96,6 @@ export interface Profiler {
 
 // === Exports ===
 export function createEntityManager(): EntityManager;
-export function component<T>(name: string): Component<T>;
-export function component<T>(name: string, schema: Schema): Component<T>;
+export function component(name: string): Component;
+export function component<S extends Schema>(name: string, schema: S): Component<SchemaToType<S>>;
 export const profiler: Profiler;

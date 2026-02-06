@@ -395,4 +395,37 @@ describe('Typed Components (SoA)', () => {
       assert.equal(arch.field(Tag, 'label'), undefined);
     });
   });
+
+  it('getField reads single field without allocation', () => {
+    const Pos = component('PosGF', { x: 'f32', y: 'f32' });
+    const id = em.createEntity();
+    em.addComponent(id, Pos, { x: 3.5, y: 7.5 });
+    assert.ok(Math.abs(em.getField(id, Pos, 'x') - 3.5) < 0.001);
+    assert.ok(Math.abs(em.getField(id, Pos, 'y') - 7.5) < 0.001);
+  });
+
+  it('setField writes single field without allocation', () => {
+    const Pos = component('PosSF', { x: 'f32', y: 'f32' });
+    const id = em.createEntity();
+    em.addComponent(id, Pos, { x: 0, y: 0 });
+    em.setField(id, Pos, 'x', 42);
+    assert.ok(Math.abs(em.getField(id, Pos, 'x') - 42) < 0.001);
+    assert.ok(Math.abs(em.getField(id, Pos, 'y') - 0) < 0.001);
+  });
+
+  it('getField/setField work on untyped components', () => {
+    const Tag = Symbol('TagGSF');
+    const id = em.createEntity();
+    em.addComponent(id, Tag, { label: 'player', score: 10 });
+    assert.equal(em.getField(id, Tag, 'label'), 'player');
+    em.setField(id, Tag, 'score', 99);
+    assert.equal(em.getField(id, Tag, 'score'), 99);
+  });
+
+  it('getField returns undefined for missing entity/component', () => {
+    const Pos = component('PosGFM', { x: 'f32', y: 'f32' });
+    assert.equal(em.getField(999, Pos, 'x'), undefined);
+    const id = em.createEntity();
+    assert.equal(em.getField(id, Pos, 'x'), undefined);
+  });
 });

@@ -277,6 +277,31 @@ export function createEntityManager() {
       return readComponentData(arch, componentName, idx);
     },
 
+    getField(entityId, componentName, field) {
+      const arch = entityArchetype.get(entityId);
+      if (!arch) return undefined;
+      const store = arch.components.get(componentName);
+      if (!store) return undefined;
+      const idx = arch.entityToIndex.get(entityId);
+      if (store[TYPED]) {
+        return store[field][idx];
+      }
+      return store[idx][field];
+    },
+
+    setField(entityId, componentName, field, value) {
+      const arch = entityArchetype.get(entityId);
+      if (!arch) return;
+      const store = arch.components.get(componentName);
+      if (!store) return;
+      const idx = arch.entityToIndex.get(entityId);
+      if (store[TYPED]) {
+        store[field][idx] = value;
+      } else {
+        store[idx][field] = value;
+      }
+    },
+
     hasComponent(entityId, componentName) {
       const arch = entityArchetype.get(entityId);
       return arch ? arch.types.has(componentName) : false;
