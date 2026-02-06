@@ -1,3 +1,47 @@
+import { TYPED, componentSchemas } from './ComponentRegistry.js';
+
+const INITIAL_CAPACITY = 64;
+
+function createSoAStore(schema, capacity) {
+  const store = { [TYPED]: true, _schema: schema, _capacity: capacity };
+  for (const [field, Ctor] of Object.entries(schema)) {
+    store[field] = new Ctor(capacity);
+  }
+  return store;
+}
+
+function growSoAStore(store, newCapacity) {
+  store._capacity = newCapacity;
+  for (const [field, Ctor] of Object.entries(store._schema)) {
+    const old = store[field];
+    store[field] = new Ctor(newCapacity);
+    store[field].set(old);
+  }
+}
+
+function soaWrite(store, idx, data) {
+  for (const field in store._schema) {
+    store[field][idx] = data[field];
+  }
+}
+
+function soaRead(store, idx) {
+  const obj = {};
+  for (const field in store._schema) {
+    obj[field] = store[field][idx];
+  }
+  return obj;
+}
+
+function soaSwap(store, idxA, idxB) {
+  for (const field in store._schema) {
+    const arr = store[field];
+    const tmp = arr[idxA];
+    arr[idxA] = arr[idxB];
+    arr[idxB] = tmp;
+  }
+}
+
 export function createEntityManager() {
   let nextId = 1;
   const allEntityIds = new Set();
@@ -41,10 +85,16 @@ export function createEntityManager() {
         entityIds: [],
         components: new Map(),
         entityToIndex: new Map(),
-        count: 0
+        count: 0,
+        capacity: INITIAL_CAPACITY
       };
       for (const t of types) {
-        arch.components.set(t, []);
+        const schema = componentSchemas.get(t);
+        if (schema) {
+          arch.components.set(t, createSoAStore(schema, INITIAL_CAPACITY));
+        } else {
+          arch.components.set(t, []);
+        }
       }
       archetypes.set(key, arch);
       queryCacheVersion++;
@@ -52,11 +102,28 @@ export function createEntityManager() {
     return arch;
   }
 
+  function ensureCapacity(arch) {
+    if (arch.count < arch.capacity) return;
+    const newCap = arch.capacity * 2;
+    arch.capacity = newCap;
+    for (const [type, store] of arch.components) {
+      if (store[TYPED]) {
+        growSoAStore(store, newCap);
+      }
+    }
+  }
+
   function addToArchetype(arch, entityId, componentMap) {
+    ensureCapacity(arch);
     const idx = arch.count;
     arch.entityIds[idx] = entityId;
     for (const t of arch.types) {
-      arch.components.get(t)[idx] = componentMap.get(t);
+      const store = arch.components.get(t);
+      if (store[TYPED]) {
+        soaWrite(store, idx, componentMap[t]);
+      } else {
+        store[idx] = componentMap[t];
+      }
     }
     arch.entityToIndex.set(entityId, idx);
     arch.count++;
@@ -71,20 +138,35 @@ export function createEntityManager() {
       // Swap with last
       const lastEntity = arch.entityIds[lastIdx];
       arch.entityIds[idx] = lastEntity;
-      for (const [type, arr] of arch.components) {
-        arr[idx] = arr[lastIdx];
+      for (const [type, store] of arch.components) {
+        if (store[TYPED]) {
+          soaSwap(store, idx, lastIdx);
+        } else {
+          store[idx] = store[lastIdx];
+        }
       }
       arch.entityToIndex.set(lastEntity, idx);
     }
 
     // Pop last
     arch.entityIds.length = lastIdx;
-    for (const [type, arr] of arch.components) {
-      arr.length = lastIdx;
+    for (const [type, store] of arch.components) {
+      if (!store[TYPED]) {
+        store.length = lastIdx;
+      }
     }
     arch.entityToIndex.delete(entityId);
     arch.count--;
     entityArchetype.delete(entityId);
+  }
+
+  function readComponentData(arch, type, idx) {
+    const store = arch.components.get(type);
+    if (!store) return undefined;
+    if (store[TYPED]) {
+      return soaRead(store, idx);
+    }
+    return store[idx];
   }
 
   function getMatchingArchetypes(types, excludeTypes) {
@@ -130,16 +212,19 @@ export function createEntityManager() {
       if (!arch) {
         // Entity has no archetype yet — create single-type archetype
         const newArch = getOrCreateArchetype([componentName]);
-        const map = new Map();
-        map.set(componentName, data);
-        addToArchetype(newArch, entityId, map);
+        addToArchetype(newArch, entityId, { [componentName]: data });
         return;
       }
 
       if (arch.types.has(componentName)) {
         // Already has this component type — just update data
         const idx = arch.entityToIndex.get(entityId);
-        arch.components.get(componentName)[idx] = data;
+        const store = arch.components.get(componentName);
+        if (store[TYPED]) {
+          soaWrite(store, idx, data);
+        } else {
+          store[idx] = data;
+        }
         return;
       }
 
@@ -149,11 +234,10 @@ export function createEntityManager() {
 
       // Collect component data from old archetype
       const idx = arch.entityToIndex.get(entityId);
-      const map = new Map();
+      const map = { [componentName]: data };
       for (const t of arch.types) {
-        map.set(t, arch.components.get(t)[idx]);
+        map[t] = readComponentData(arch, t, idx);
       }
-      map.set(componentName, data);
 
       removeFromArchetype(arch, entityId);
       addToArchetype(newArch, entityId, map);
@@ -176,9 +260,9 @@ export function createEntityManager() {
       const newArch = getOrCreateArchetype(newTypes);
 
       const idx = arch.entityToIndex.get(entityId);
-      const map = new Map();
+      const map = {};
       for (const t of newTypes) {
-        map.set(t, arch.components.get(t)[idx]);
+        map[t] = readComponentData(arch, t, idx);
       }
 
       removeFromArchetype(arch, entityId);
@@ -188,9 +272,9 @@ export function createEntityManager() {
     getComponent(entityId, componentName) {
       const arch = entityArchetype.get(entityId);
       if (!arch) return undefined;
-      const arr = arch.components.get(componentName);
-      if (!arr) return undefined;
-      return arr[arch.entityToIndex.get(entityId)];
+      const idx = arch.entityToIndex.get(entityId);
+      if (idx === undefined) return undefined;
+      return readComponentData(arch, componentName, idx);
     },
 
     hasComponent(entityId, componentName) {
@@ -215,13 +299,18 @@ export function createEntityManager() {
       return [...allEntityIds];
     },
 
-    createEntityWith(componentMap) {
+    createEntityWith(...args) {
       const id = nextId++;
       allEntityIds.add(id);
 
-      const types = [...componentMap.keys()];
+      const types = [];
+      const map = {};
+      for (let i = 0; i < args.length; i += 2) {
+        types.push(args[i]);
+        map[args[i]] = args[i + 1];
+      }
       const arch = getOrCreateArchetype(types);
-      addToArchetype(arch, id, componentMap);
+      addToArchetype(arch, id, map);
 
       return id;
     },
@@ -233,6 +322,24 @@ export function createEntityManager() {
         total += matching[a].count;
       }
       return total;
+    },
+
+    forEach(includeTypes, callback, excludeTypes) {
+      const matching = getMatchingArchetypes(includeTypes, excludeTypes);
+      for (let a = 0; a < matching.length; a++) {
+        const arch = matching[a];
+        if (arch.count === 0) continue;
+        const view = {
+          entityIds: arch.entityIds,
+          count: arch.count,
+          field(type, name) {
+            const store = arch.components.get(type);
+            if (!store || !store[TYPED]) return undefined;
+            return store[name];
+          }
+        };
+        callback(view);
+      }
     },
 
     serialize(symbolToName, stripComponents = [], skipEntitiesWith = [], { serializers } = {}) {
@@ -257,7 +364,7 @@ export function createEntityManager() {
       const serializedComponents = {};
 
       for (const arch of archetypes.values()) {
-        for (const [sym, arr] of arch.components) {
+        for (const [sym, store] of arch.components) {
           if (stripSymbols.has(sym) || skipSymbols.has(sym)) continue;
           const name = symbolToName.get(sym);
           if (!name) continue;
@@ -268,14 +375,16 @@ export function createEntityManager() {
           const entries = serializedComponents[name];
 
           const customSerializer = serializers && serializers.get(name);
+          const isTyped = store[TYPED];
 
           for (let i = 0; i < arch.count; i++) {
             const entityId = arch.entityIds[i];
             if (skipEntityIds.has(entityId)) continue;
+            const value = isTyped ? soaRead(store, i) : store[i];
             if (customSerializer) {
-              entries[entityId] = customSerializer(arr[i]);
+              entries[entityId] = customSerializer(value);
             } else {
-              entries[entityId] = structuredClone(arr[i]);
+              entries[entityId] = isTyped ? value : structuredClone(value);
             }
           }
         }
@@ -310,12 +419,12 @@ export function createEntityManager() {
 
       nextId = data.nextId;
 
-      // Build per-entity component maps
+      // Build per-entity component maps (plain objects with symbol keys)
       const entityComponents = new Map();
 
       for (const id of data.entities) {
         allEntityIds.add(id);
-        entityComponents.set(id, new Map());
+        entityComponents.set(id, {});
       }
 
       for (const [name, store] of Object.entries(data.components)) {
@@ -326,13 +435,13 @@ export function createEntityManager() {
 
         for (const [entityIdStr, compData] of Object.entries(store)) {
           const entityId = Number(entityIdStr);
-          const map = entityComponents.get(entityId);
-          if (!map) continue;
+          const obj = entityComponents.get(entityId);
+          if (!obj) continue;
 
           if (customDeserializer) {
-            map.set(sym, customDeserializer(compData));
+            obj[sym] = customDeserializer(compData);
           } else {
-            map.set(sym, compData);
+            obj[sym] = compData;
           }
         }
       }
@@ -340,9 +449,10 @@ export function createEntityManager() {
       // Group by archetype key and bulk-insert
       const groupedByKey = new Map();
       for (const [entityId, compMap] of entityComponents) {
-        if (compMap.size === 0) continue; // entity with no components
+        const types = Object.getOwnPropertySymbols(compMap);
+        if (types.length === 0) continue; // entity with no components
 
-        const key = computeMask([...compMap.keys()]);
+        const key = computeMask(types);
         if (!groupedByKey.has(key)) {
           groupedByKey.set(key, []);
         }
@@ -350,7 +460,7 @@ export function createEntityManager() {
       }
 
       for (const [key, entries] of groupedByKey) {
-        const types = [...entries[0].compMap.keys()];
+        const types = Object.getOwnPropertySymbols(entries[0].compMap);
         const arch = getOrCreateArchetype(types);
 
         for (const { entityId, compMap } of entries) {

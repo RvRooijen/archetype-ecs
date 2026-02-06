@@ -1,15 +1,37 @@
 // === Basis types ===
 export type EntityId = number;
-export type ComponentType = symbol;
+
+declare const __component_brand: unique symbol;
+export type Component<T = unknown> = symbol & { readonly [__component_brand]?: T };
+
+/** @deprecated Use Component<T> instead */
+export type ComponentType = Component;
+
+// === TypedArray schema ===
+export type TypedArrayType = 'f32' | 'f64' | 'i8' | 'i16' | 'i32' | 'u8' | 'u16' | 'u32';
+
+export type Schema = Record<string, TypedArrayType>;
+
+export declare const TYPED: unique symbol;
+
+export declare const componentSchemas: Map<symbol, Record<string, Float32ArrayConstructor | Float64ArrayConstructor | Int8ArrayConstructor | Int16ArrayConstructor | Int32ArrayConstructor | Uint8ArrayConstructor | Uint16ArrayConstructor | Uint32ArrayConstructor>>;
 
 // === Archetype ===
 export interface Archetype {
   readonly key: number;
-  readonly types: ReadonlySet<ComponentType>;
+  readonly types: ReadonlySet<Component>;
   readonly entityIds: EntityId[];
-  readonly components: Map<ComponentType, unknown[]>;
+  readonly components: Map<Component, unknown[] | Record<string, ArrayLike<number>>>;
   readonly entityToIndex: Map<EntityId, number>;
   count: number;
+  capacity: number;
+}
+
+// === ArchetypeView (forEach callback) ===
+export interface ArchetypeView {
+  readonly entityIds: EntityId[];
+  readonly count: number;
+  field(type: Component, name: string): Float32Array | Float64Array | Int8Array | Int16Array | Int32Array | Uint8Array | Uint16Array | Uint32Array | undefined;
 }
 
 // === Serialize/Deserialize ===
@@ -31,23 +53,24 @@ export interface SerializedData {
 export interface EntityManager {
   createEntity(): EntityId;
   destroyEntity(id: EntityId): void;
-  addComponent(entityId: EntityId, type: ComponentType, data: unknown): void;
-  removeComponent(entityId: EntityId, type: ComponentType): void;
-  getComponent(entityId: EntityId, type: ComponentType): unknown;
-  hasComponent(entityId: EntityId, type: ComponentType): boolean;
-  query(include: ComponentType[], exclude?: ComponentType[]): EntityId[];
+  addComponent<T>(entityId: EntityId, type: Component<T>, data: T): void;
+  removeComponent(entityId: EntityId, type: Component): void;
+  getComponent<T>(entityId: EntityId, type: Component<T>): T | undefined;
+  hasComponent(entityId: EntityId, type: Component): boolean;
+  query(include: Component[], exclude?: Component[]): EntityId[];
   getAllEntities(): EntityId[];
-  createEntityWith(components: Map<ComponentType, unknown>): EntityId;
-  count(include: ComponentType[], exclude?: ComponentType[]): number;
+  createEntityWith(...args: Array<Component | unknown>): EntityId;
+  count(include: Component[], exclude?: Component[]): number;
+  forEach(include: Component[], callback: (view: ArchetypeView) => void, exclude?: Component[]): void;
   serialize(
-    symbolToName: Map<ComponentType, string>,
-    stripComponents?: ComponentType[],
-    skipEntitiesWith?: ComponentType[],
+    symbolToName: Map<Component, string>,
+    stripComponents?: Component[],
+    skipEntitiesWith?: Component[],
     options?: SerializeOptions
   ): SerializedData;
   deserialize(
     data: SerializedData,
-    nameToSymbol: Record<string, ComponentType>,
+    nameToSymbol: Record<string, Component>,
     options?: DeserializeOptions
   ): void;
 }
@@ -68,4 +91,6 @@ export interface Profiler {
 
 // === Exports ===
 export function createEntityManager(): EntityManager;
+export function component<T>(name: string): Component<T>;
+export function component<T>(name: string, schema: Schema): Component<T>;
 export const profiler: Profiler;
