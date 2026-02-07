@@ -4,7 +4,7 @@
   <br><br>
   <strong>archetype-ecs</strong>
   <br>
-  <sub>Tiny, fast ECS with TypedArray storage. Zero dependencies.</sub>
+  <sub>ECS with TypedArray storage. No dependencies.</sub>
   <br><br>
   <a href="https://www.npmjs.com/package/archetype-ecs"><img src="https://img.shields.io/npm/v/archetype-ecs.svg?style=flat-square&color=000" alt="npm" /></a>
   <img src="https://img.shields.io/badge/gzip-~5kb-000?style=flat-square" alt="size" />
@@ -13,15 +13,11 @@
 
 ---
 
-Entities grouped by component composition. Numeric fields in contiguous TypedArrays, strings in SoA arrays. Bitmask query matching. Zero-allocation hot paths.
+An Entity Component System for games and simulations in JavaScript. Entities with the same components are grouped into archetypes, and their fields are stored in TypedArrays — so iterating a million entities is a tight loop over contiguous memory, not a scatter of object lookups.
 
 ```
 npm i archetype-ecs
 ```
-
----
-
-### The full picture in 20 lines
 
 ```ts
 import { createEntityManager, component } from 'archetype-ecs'
@@ -50,18 +46,15 @@ em.forEach([Position, Velocity], (arch) => {
 })
 ```
 
-Define components, spawn entities, iterate with raw TypedArrays — no allocations, no cache misses, full type safety.
-
 ---
 
 ### Why archetype-ecs?
 
 <table>
-<tr><td><strong>1.5x faster iteration</strong></td><td>SoA TypedArrays iterate faster than sparse arrays. Benchmarked at 2.1 ms/frame vs 3.1 ms for bitECS over 1M entities.</td></tr>
-<tr><td><strong>2.4x less memory</strong></td><td>Packed archetypes use 86 MB for 1M entities vs 204 MB for sparse-array ECS.</td></tr>
-<tr><td><strong>Zero-alloc hot path</strong></td><td><code>em.get</code>, <code>em.set</code>, and <code>forEach</code> never allocate. Your GC stays quiet.</td></tr>
-<tr><td><strong>Type-safe</strong></td><td>Full TypeScript generics. Field names autocomplete. Wrong fields don't compile.</td></tr>
-<tr><td><strong>Zero dependencies</strong></td><td>~5kb gzipped. No build step. Ships as ES modules.</td></tr>
+<tr><td><strong>Fast iteration</strong></td><td>1.7 ms/frame over 1M entities. Faster than bitecs, wolf-ecs, harmony-ecs — see <a href="#benchmarks">benchmarks</a>.</td></tr>
+<tr><td><strong>Low memory</strong></td><td>86 MB for 1M entities. Sparse-array ECS libraries use up to 2.4x more.</td></tr>
+<tr><td><strong>No allocations</strong></td><td><code>get</code>, <code>set</code>, and <code>forEach</code> don't allocate.</td></tr>
+<tr><td><strong>Typed</strong></td><td>TypeScript generics throughout. Field names autocomplete, wrong fields don't compile.</td></tr>
 </table>
 
 ---
@@ -71,12 +64,12 @@ Define components, spawn entities, iterate with raw TypedArrays — no allocatio
 ```ts
 import { createEntityManager, component } from 'archetype-ecs'
 
-// Numeric — backed by TypedArrays for cache-friendly iteration
+// Numeric — stored as TypedArrays
 const Position = component('Position', 'f32', ['x', 'y'])
 const Velocity = component('Velocity', 'f32', ['vx', 'vy'])
 const Health   = component('Health', { hp: 'i32', maxHp: 'i32' })
 
-// Strings — backed by SoA arrays, same field access API
+// Strings — stored as arrays, same API
 const Name     = component('Name', 'string', ['name', 'title'])
 
 // Mixed — numeric and string fields in one component
@@ -100,7 +93,7 @@ em.addComponent(player, Velocity, { vx: 0, vy: 0 })
 em.addComponent(player, Health, { hp: 100, maxHp: 100 })
 em.addComponent(player, Name, { name: 'Hero', title: 'Sir' })
 
-// Or all at once — no archetype migration overhead
+// Or all at once
 for (let i = 0; i < 10_000; i++) {
   em.createEntityWith(
     Position, { x: Math.random() * 800, y: Math.random() * 600 },
@@ -117,7 +110,7 @@ em.destroyEntity(player)
 ### Read & write
 
 ```js
-// Zero allocation — access any field directly
+// Access a single field (doesn't allocate)
 em.get(player, Position.x)         // 0
 em.get(player, Name.name)          // 'Hero'
 em.set(player, Velocity.vx, 5)
@@ -131,9 +124,9 @@ em.getComponent(player, Name)      // { name: 'Hero', title: 'Sir' }
 
 Two ways to work with entities in bulk. Pick the right one for the job:
 
-#### `forEach` — zero-alloc bulk processing
+#### `forEach` — bulk processing
 
-Best for **systems that run every frame**. Gives you raw TypedArrays — no entity lookups, no object allocations, no cache misses.
+Iterates over matching archetypes. You get the backing TypedArrays directly.
 
 ```js
 function movementSystem(dt) {
@@ -152,7 +145,7 @@ function movementSystem(dt) {
 
 #### `query` — when you need entity IDs
 
-Best for **event-driven logic** where you need to store, pass around, or target specific entity IDs.
+Returns entity IDs for when you need to target specific entities.
 
 ```js
 // Find the closest enemy to the player
@@ -182,7 +175,7 @@ const total = em.count([Position])
 | **Use for** | Movement, physics, rendering | Damage events, UI, spawning |
 | **Runs** | Every frame | On demand |
 | **Allocates** | Nothing | `number[]` of entity IDs |
-| **Access** | Raw TypedArrays by field | `get` / `set` by entity ID |
+| **Access** | TypedArrays by field | `get` / `set` by entity ID |
 
 ### Serialize
 
@@ -200,13 +193,13 @@ const json = JSON.stringify(snapshot)
 em.deserialize(JSON.parse(json), { Position, Velocity, Health })
 ```
 
-Strip components, skip entities, or plug in custom serializers — see the API section below.
+Supports stripping components, skipping entities, and custom serializers.
 
 ---
 
 ## TypeScript
 
-Every component carries its type. Field names autocomplete, wrong fields and shapes are compile errors.
+Component types are inferred from their definition. Field names autocomplete, wrong fields are compile errors.
 
 ```ts
 // Schema is inferred — Position becomes ComponentDef<{ x: number; y: number }>
@@ -269,17 +262,17 @@ Returns an entity manager with the following methods:
 | Method | Description |
 |---|---|
 | `createEntity()` | Create an empty entity |
-| `createEntityWith(Comp, data, ...)` | Create entity with components — no migration cost |
+| `createEntityWith(Comp, data, ...)` | Create entity with components in one call |
 | `destroyEntity(id)` | Remove entity and all its components |
 | `addComponent(id, Comp, data)` | Add a component to an existing entity |
 | `removeComponent(id, Comp)` | Remove a component |
 | `hasComponent(id, Comp)` | Check if entity has a component |
 | `getComponent(id, Comp)` | Get component data as object *(allocates)* |
-| `get(id, Comp.field)` | Read a single field *(zero-alloc)* |
-| `set(id, Comp.field, value)` | Write a single field *(zero-alloc)* |
+| `get(id, Comp.field)` | Read a single field |
+| `set(id, Comp.field, value)` | Write a single field |
 | `query(include, exclude?)` | Get matching entity IDs |
 | `count(include, exclude?)` | Count matching entities |
-| `forEach(include, callback, exclude?)` | Iterate archetypes with raw TypedArray access |
+| `forEach(include, callback, exclude?)` | Iterate archetypes with TypedArray access |
 | `serialize(symbolToName, strip?, skip?, opts?)` | Serialize world to JSON-friendly object |
 | `deserialize(data, nameToSymbol, opts?)` | Restore world from serialized data |
 
@@ -287,28 +280,70 @@ Returns an entity manager with the following methods:
 
 ## Benchmarks
 
-1M entities, Position += Velocity, measured on Node.js:
+1M entities, Position += Velocity, 5 runs (median), Node.js:
 
+| | archetype-ecs | [bitecs](https://github.com/NateTheGreatt/bitECS) | [wolf-ecs](https://github.com/EnderShadow8/wolf-ecs) | [harmony-ecs](https://github.com/3mcd/harmony-ecs) | [miniplex](https://github.com/hmans/miniplex) |
+|---|---:|---:|---:|---:|---:|
+| **Iteration** (ms/frame) | **1.7** | 2.2 | 2.2 | 1.8 | 32.5 |
+| **Entity creation** (ms) | 401 | 366 | **106** | 248 | 265 |
+| **Memory** (MB) | 86 | 204 | 60 | **31** | 166 |
+
+Each library runs the same test — iterate 1M entities over 500 frames:
+
+```js
+// archetype-ecs
+em.forEach([Position, Velocity], (arch) => {
+  const px = arch.field(Position.x)   // Float32Array, dense
+  const py = arch.field(Position.y)
+  const vx = arch.field(Velocity.vx)
+  const vy = arch.field(Velocity.vy)
+  for (let i = 0; i < arch.count; i++) {
+    px[i] += vx[i]
+    py[i] += vy[i]
+  }
+})
 ```
-Iteration (500 frames)
-  archetype-ecs     2.1 ms/frame
-  bitECS            3.1 ms/frame     → 1.5x slower
 
-Entity creation (1M)
-  createEntityWith  427 ms
-  bitECS            394 ms           → comparable
-
-Memory (1M entities)
-  archetype-ecs     86 MB
-  bitECS            204 MB           → 2.4x more
-```
+archetype-ecs is fastest at iteration. Harmony-ecs and wolf-ecs are close; miniplex is ~20x slower due to object-based storage.
 
 Run them yourself:
 
 ```bash
-node bench/typed-vs-bitecs-1m.js
-node --expose-gc bench/allocations-1m.js
+npm run bench
 ```
+
+---
+
+## Feature comparison
+
+Compared against other JS ECS libraries:
+
+### Unique to archetype-ecs
+
+| Feature | archetype-ecs | bitecs | wolf-ecs | harmony-ecs | miniplex |
+|---|:---:|:---:|:---:|:---:|:---:|
+| String SoA storage | ✓ | — | — | — | — |
+| Mixed string + numeric components | ✓ | — | — | — | — |
+| `forEach` with dense TypedArray field access | ✓ | — | — | — | — |
+| Field descriptors for both per-entity and bulk access | ✓ | — | — | — | — |
+| Built-in profiler | ✓ | — | — | — | — |
+
+### Full comparison
+
+| Feature | archetype-ecs | bitecs | wolf-ecs | harmony-ecs | miniplex |
+|---|:---:|:---:|:---:|:---:|:---:|
+| TypedArray iteration | ✓ | ✓ | ✓ | ✓ | — |
+| String support | ✓ | ✓ | — | — | ✓ |
+| Serialize / deserialize | ✓ | ✓✓ | — | — | — |
+| TypeScript type inference | ✓ | — | ✓ | ✓ | ✓✓ |
+| Batch entity creation | ✓ | — | — | ✓ | ✓ |
+| Zero-alloc per-entity access | ✓ | ✓ | ✓ | ✓ | — |
+| Relations / hierarchies | — | ✓ | — | — | — |
+| React integration | — | — | — | — | ✓ |
+
+✓✓ = notably stronger implementation in that library.
+
+archetype-ecs is the only one that combines fast iteration, string storage, serialization, and type safety.
 
 ---
 
