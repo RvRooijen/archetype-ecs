@@ -21,7 +21,52 @@ npm i archetype-ecs
 
 ---
 
-### Define
+### The full picture in 20 lines
+
+```ts
+import { createEntityManager, component } from 'archetype-ecs'
+
+const Position = component('Position', 'f32', ['x', 'y'])
+const Velocity = component('Velocity', 'f32', ['vx', 'vy'])
+
+const em = createEntityManager()
+
+for (let i = 0; i < 10_000; i++) {
+  em.createEntityWith(
+    Position, { x: Math.random() * 800, y: Math.random() * 600 },
+    Velocity, { vx: Math.random() - 0.5, vy: Math.random() - 0.5 },
+  )
+}
+
+em.forEach([Position, Velocity], (arch) => {
+  const px = arch.field(Position.x)  // Float32Array
+  const py = arch.field(Position.y)
+  const vx = arch.field(Velocity.vx)
+  const vy = arch.field(Velocity.vy)
+  for (let i = 0; i < arch.count; i++) {
+    px[i] += vx[i]
+    py[i] += vy[i]
+  }
+})
+```
+
+Define components, spawn entities, iterate with raw TypedArrays — no allocations, no cache misses, full type safety.
+
+---
+
+### Why archetype-ecs?
+
+<table>
+<tr><td><strong>1.5x faster iteration</strong></td><td>SoA TypedArrays iterate faster than sparse arrays. Benchmarked at 2.1 ms/frame vs 3.1 ms for bitECS over 1M entities.</td></tr>
+<tr><td><strong>2.4x less memory</strong></td><td>Packed archetypes use 86 MB for 1M entities vs 204 MB for sparse-array ECS.</td></tr>
+<tr><td><strong>Zero-alloc hot path</strong></td><td><code>em.get</code>, <code>em.set</code>, and <code>forEach</code> never allocate. Your GC stays quiet.</td></tr>
+<tr><td><strong>Type-safe</strong></td><td>Full TypeScript generics. Field names autocomplete. Wrong fields don't compile.</td></tr>
+<tr><td><strong>Zero dependencies</strong></td><td>~5kb gzipped. No build step. Ships as ES modules.</td></tr>
+</table>
+
+---
+
+### Components
 
 ```ts
 import { createEntityManager, component } from 'archetype-ecs'
@@ -43,7 +88,7 @@ const Enemy    = component('Enemy')
 
 > Field types: `f32` `f64` `i8` `i16` `i32` `u8` `u16` `u32` `string`
 
-### Create
+### Entities
 
 ```js
 const em = createEntityManager()
@@ -82,7 +127,13 @@ em.getComponent(player, Position)  // { x: 0, y: 0 }
 em.getComponent(player, Name)      // { name: 'Hero', title: 'Sir' }
 ```
 
-### Iterate
+### Systems — `forEach` vs `query`
+
+Two ways to work with entities in bulk. Pick the right one for the job:
+
+#### `forEach` — zero-alloc bulk processing
+
+Best for **systems that run every frame**. Gives you raw TypedArrays — no entity lookups, no object allocations, no cache misses.
 
 ```js
 function movementSystem(dt) {
@@ -99,15 +150,39 @@ function movementSystem(dt) {
 }
 ```
 
-`forEach` gives you raw TypedArrays. No entity lookups, no object allocations, no cache misses — just tight loops over contiguous memory.
+#### `query` — when you need entity IDs
 
-### Query
+Best for **event-driven logic** where you need to store, pass around, or target specific entity IDs.
 
 ```js
-const enemies  = em.query([Health, Enemy])
-const friendly = em.query([Health], [Enemy])   // exclude enemies
-const total    = em.count([Position])
+// Find the closest enemy to the player
+const enemies = em.query([Position, Enemy])
+let closest = -1, minDist = Infinity
+for (const id of enemies) {
+  const dx = em.get(id, Position.x) - playerX
+  const dy = em.get(id, Position.y) - playerY
+  const dist = dx * dx + dy * dy
+  if (dist < minDist) { minDist = dist; closest = id }
+}
+
+// Store the result as a component
+em.addComponent(player, Target, { entityId: closest })
+
+// Exclude enemies from friendly queries
+const friendly = em.query([Health], [Enemy])
+
+// Just need a count? No allocation needed
+const total = em.count([Position])
 ```
+
+#### When to use which
+
+| | `forEach` | `query` |
+|---|---|---|
+| **Use for** | Movement, physics, rendering | Damage events, UI, spawning |
+| **Runs** | Every frame | On demand |
+| **Allocates** | Nothing | `number[]` of entity IDs |
+| **Access** | Raw TypedArrays by field | `get` / `set` by entity ID |
 
 ### Serialize
 
@@ -129,15 +204,38 @@ Strip components, skip entities, or plug in custom serializers — see the API s
 
 ---
 
-### Why archetype-ecs?
+## TypeScript
 
-<table>
-<tr><td><strong>1.5x faster iteration</strong></td><td>SoA TypedArrays iterate faster than sparse arrays. Benchmarked at 2.1 ms/frame vs 3.1 ms for bitECS over 1M entities.</td></tr>
-<tr><td><strong>2.4x less memory</strong></td><td>Packed archetypes use 86 MB for 1M entities vs 204 MB for sparse-array ECS.</td></tr>
-<tr><td><strong>Zero-alloc hot path</strong></td><td><code>em.get</code>, <code>em.set</code>, and <code>forEach</code> never allocate. Your GC stays quiet.</td></tr>
-<tr><td><strong>Type-safe</strong></td><td>Full TypeScript generics. Field names autocomplete. Wrong fields don't compile.</td></tr>
-<tr><td><strong>Zero dependencies</strong></td><td>~5kb gzipped. No build step. Ships as ES modules.</td></tr>
-</table>
+Every component carries its type. Field names autocomplete, wrong fields and shapes are compile errors.
+
+```ts
+// Schema is inferred — Position becomes ComponentDef<{ x: number; y: number }>
+const Position = component('Position', 'f32', ['x', 'y'])
+
+Position.x                // autocompletes to .x and .y
+Position.z                // Property 'z' does not exist
+
+em.get(id, Position.x)    // number | undefined
+em.set(id, Position.z, 5) // Property 'z' does not exist
+
+em.addComponent(id, Position, { x: 1, y: 2 })  // ok
+em.addComponent(id, Position, { x: 1 })         // Property 'y' is missing
+
+em.getComponent(id, Position)  // { x: number; y: number } | undefined
+```
+
+String fields are fully typed too:
+
+```ts
+const Name = component('Name', 'string', ['name', 'title'])
+
+em.get(id, Name.name)    // string | undefined
+em.set(id, Name.name, 'Hero')    // ok
+em.set(id, Name.name, 42)        // number not assignable to string
+
+em.addComponent(id, Name, { name: 'Hero', title: 'Sir' })  // ok
+em.addComponent(id, Name, { foo: 'bar' })                   // type error
+```
 
 ---
 
@@ -184,41 +282,6 @@ Returns an entity manager with the following methods:
 | `forEach(include, callback, exclude?)` | Iterate archetypes with raw TypedArray access |
 | `serialize(symbolToName, strip?, skip?, opts?)` | Serialize world to JSON-friendly object |
 | `deserialize(data, nameToSymbol, opts?)` | Restore world from serialized data |
-
----
-
-## TypeScript
-
-Every component carries its type. Field names autocomplete, wrong fields and shapes are compile errors.
-
-```ts
-// Schema is inferred — Position becomes ComponentDef<{ x: number; y: number }>
-const Position = component('Position', 'f32', ['x', 'y'])
-
-Position.x                // ✅ autocompletes to .x and .y
-Position.z                // ❌ Property 'z' does not exist
-
-em.get(id, Position.x)    // number | undefined
-em.set(id, Position.z, 5) // ❌ Property 'z' does not exist
-
-em.addComponent(id, Position, { x: 1, y: 2 })  // ✅
-em.addComponent(id, Position, { x: 1 })         // ❌ Property 'y' is missing
-
-em.getComponent(id, Position)  // { x: number; y: number } | undefined
-```
-
-String fields are fully typed too:
-
-```ts
-const Name = component('Name', 'string', ['name', 'title'])
-
-em.get(id, Name.name)    // string | undefined
-em.set(id, Name.name, 'Hero')    // ✅
-em.set(id, Name.name, 42)        // ❌ number not assignable to string
-
-em.addComponent(id, Name, { name: 'Hero', title: 'Sir' })  // ✅
-em.addComponent(id, Name, { foo: 'bar' })                   // ❌ type error
-```
 
 ---
 
