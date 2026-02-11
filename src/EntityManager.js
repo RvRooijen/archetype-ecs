@@ -46,9 +46,38 @@ function soaSwap(store, idxA, idxB) {
   }
 }
 
+function createSnapshotStore(schema, capacity) {
+  const snap = {};
+  for (const [field, Ctor] of Object.entries(schema)) {
+    snap[field] = new Ctor(capacity);
+  }
+  return snap;
+}
+
+function growSnapshotStore(snap, schema, newCapacity) {
+  for (const [field, Ctor] of Object.entries(schema)) {
+    const old = snap[field];
+    snap[field] = new Ctor(newCapacity);
+    if (Ctor === Array) {
+      for (let i = 0; i < old.length; i++) snap[field][i] = old[i];
+    } else {
+      snap[field].set(old);
+    }
+  }
+}
+
 export function createEntityManager() {
   let nextId = 1;
   const allEntityIds = new Set();
+
+  // Change tracking (opt-in via enableTracking)
+  let trackFilter = 0;   // bitmask — only track archetypes matching this
+  let createdSet = null;  // Set<EntityId>
+  let destroyedSet = null; // Set<EntityId>
+
+  // Double-buffered snapshots: tracked archetypes get back-buffer arrays
+  // Game systems write to front (normal SoA arrays), flushSnapshots copies front→back
+  const trackedArchetypes = [];  // archetypes that match trackFilter
 
   // Component bit registry (symbol → bit index 0..31)
   const componentBitIndex = new Map();
@@ -84,20 +113,29 @@ export function createEntityManager() {
     const key = computeMask(types);
     let arch = archetypes.get(key);
     if (!arch) {
+      const tracked = trackFilter !== 0 && (key & trackFilter) !== 0;
       arch = {
         key,
         types: new Set(types),
         entityIds: [],
         components: new Map(),
+        snapshots: tracked ? new Map() : null,
+        snapshotEntityIds: tracked ? [] : null,
+        snapshotCount: 0,
         entityToIndex: new Map(),
         count: 0,
         capacity: INITIAL_CAPACITY
       };
       for (const t of types) {
         const schema = componentSchemas.get(t);
-        arch.components.set(t, schema ? createSoAStore(schema, INITIAL_CAPACITY) : null);
+        const store = schema ? createSoAStore(schema, INITIAL_CAPACITY) : null;
+        arch.components.set(t, store);
+        if (tracked && store) {
+          arch.snapshots.set(t, createSnapshotStore(schema, INITIAL_CAPACITY));
+        }
       }
       archetypes.set(key, arch);
+      if (tracked) trackedArchetypes.push(arch);
       queryCacheVersion++;
     }
     return arch;
@@ -108,7 +146,13 @@ export function createEntityManager() {
     const newCap = arch.capacity * 2;
     arch.capacity = newCap;
     for (const [type, store] of arch.components) {
-      if (store) growSoAStore(store, newCap);
+      if (store) {
+        growSoAStore(store, newCap);
+        if (arch.snapshots) {
+          const snap = arch.snapshots.get(type);
+          if (snap) growSnapshotStore(snap, store._schema, newCap);
+        }
+      }
     }
   }
 
@@ -182,6 +226,7 @@ export function createEntityManager() {
     destroyEntity(id) {
       const arch = entityArchetype.get(id);
       if (arch) {
+        if (destroyedSet && (arch.key & trackFilter)) destroyedSet.add(id);
         removeFromArchetype(arch, id);
       }
       allEntityIds.delete(id);
@@ -223,6 +268,9 @@ export function createEntityManager() {
       const type = toSym(comp);
       const arch = entityArchetype.get(entityId);
       if (!arch || !arch.types.has(type)) return;
+
+      // If entity is leaving a tracked archetype, treat as destroyed
+      if (destroyedSet && (arch.key & trackFilter)) destroyedSet.add(entityId);
 
       if (arch.types.size === 1) {
         removeFromArchetype(arch, entityId);
@@ -309,6 +357,7 @@ export function createEntityManager() {
       const arch = getOrCreateArchetype(types);
       addToArchetype(arch, id, map);
 
+      if (createdSet && (arch.key & trackFilter)) createdSet.add(id);
       return id;
     },
 
@@ -326,17 +375,84 @@ export function createEntityManager() {
       for (let a = 0; a < matching.length; a++) {
         const arch = matching[a];
         if (arch.count === 0) continue;
+        const snaps = arch.snapshots;
         const view = {
+          id: arch.key,
           entityIds: arch.entityIds,
           count: arch.count,
+          snapshotEntityIds: arch.snapshotEntityIds,
+          snapshotCount: arch.snapshotCount,
           field(ref) {
             const sym = ref._sym || ref;
             const store = arch.components.get(sym);
             if (!store) return undefined;
             return store[ref._field];
+          },
+          snapshot(ref) {
+            if (!snaps) return undefined;
+            const sym = ref._sym || ref;
+            const snap = snaps.get(sym);
+            if (!snap) return undefined;
+            return snap[ref._field];
           }
         };
         callback(view);
+      }
+    },
+
+    enableTracking(filterComponent) {
+      trackFilter = 1 << getBit(filterComponent);
+      createdSet = new Set();
+      destroyedSet = new Set();
+      // Retroactively add snapshots to existing matching archetypes
+      for (const arch of archetypes.values()) {
+        if ((arch.key & trackFilter) !== 0 && !arch.snapshots) {
+          arch.snapshots = new Map();
+          arch.snapshotEntityIds = [];
+          arch.snapshotCount = 0;
+          for (const [t, store] of arch.components) {
+            if (store) {
+              arch.snapshots.set(t, createSnapshotStore(store._schema, arch.capacity));
+            }
+          }
+          trackedArchetypes.push(arch);
+        }
+      }
+    },
+
+    flushChanges() {
+      const result = { created: createdSet, destroyed: destroyedSet };
+      createdSet = new Set();
+      destroyedSet = new Set();
+      return result;
+    },
+
+    flushSnapshots() {
+      for (let a = 0; a < trackedArchetypes.length; a++) {
+        const arch = trackedArchetypes[a];
+        const count = arch.count;
+        // Copy entityIds
+        const eids = arch.entityIds;
+        const snapEids = arch.snapshotEntityIds;
+        for (let i = 0; i < count; i++) snapEids[i] = eids[i];
+        arch.snapshotCount = count;
+        // Copy all field arrays via .set() (one memcpy per field)
+        for (const [type, store] of arch.components) {
+          if (!store) continue;
+          const snap = arch.snapshots.get(type);
+          if (!snap) continue;
+          for (const field in store._schema) {
+            const src = store[field];
+            const dst = snap[field];
+            if (src.set) {
+              // TypedArray — use .set() for memcpy, only copy active region
+              dst.set(src.subarray(0, count));
+            } else {
+              // Regular Array (string fields)
+              for (let i = 0; i < count; i++) dst[i] = src[i];
+            }
+          }
+        }
       }
     },
 

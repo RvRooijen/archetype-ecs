@@ -41,9 +41,13 @@ type TypedArray = Float32Array | Float64Array | Int8Array | Int16Array | Int32Ar
 
 // === ArchetypeView (forEach callback) ===
 export interface ArchetypeView {
+  readonly id: number;
   readonly entityIds: EntityId[];
   readonly count: number;
+  readonly snapshotEntityIds: EntityId[] | null;
+  readonly snapshotCount: number;
   field(ref: FieldRef<any>): TypedArray | unknown[] | undefined;
+  snapshot(ref: FieldRef<any>): TypedArray | unknown[] | undefined;
 }
 
 // === Serialize/Deserialize ===
@@ -76,6 +80,9 @@ export interface EntityManager {
   createEntityWith(...args: unknown[]): EntityId;
   count(include: ComponentDef[], exclude?: ComponentDef[]): number;
   forEach(include: ComponentDef[], callback: (view: ArchetypeView) => void, exclude?: ComponentDef[]): void;
+  enableTracking(filterComponent: ComponentDef): void;
+  flushChanges(): { created: Set<EntityId>; destroyed: Set<EntityId> };
+  flushSnapshots(): void;
   serialize(
     symbolToName: Map<symbol, string>,
     stripComponents?: ComponentDef[],
