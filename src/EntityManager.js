@@ -2,6 +2,78 @@ import { TYPED, componentSchemas, toSym } from './ComponentRegistry.js';
 
 const INITIAL_CAPACITY = 64;
 
+// ── Array-based bitmask helpers ──────────────────────────
+
+/** Number of u32 slots needed for the given bit count */
+function slotsNeeded(bitCount) {
+  return ((bitCount - 1) >>> 5) + 1;
+}
+
+function createMask(slots) {
+  return new Uint32Array(slots);
+}
+
+function maskSetBit(mask, bit) {
+  const slot = bit >>> 5;
+  // Grow if needed
+  if (slot >= mask.length) {
+    const grown = new Uint32Array(slot + 1);
+    grown.set(mask);
+    mask = grown;
+    mask[slot] |= (1 << (bit & 31));
+    return grown;
+  }
+  mask[slot] |= (1 << (bit & 31));
+  return mask;
+}
+
+/** Ensure mask has at least `slots` length, returning a new array if grown */
+function ensureMaskSize(mask, slots) {
+  if (mask.length >= slots) return mask;
+  const grown = new Uint32Array(slots);
+  grown.set(mask);
+  return grown;
+}
+
+/** Check: (a & b) === b  (all bits in b are set in a) */
+function maskContains(a, b) {
+  for (let i = 0; i < b.length; i++) {
+    const av = i < a.length ? a[i] : 0;
+    if ((av & b[i]) !== b[i]) return false;
+  }
+  return true;
+}
+
+/** Check: (a & b) === 0  (no bits in b are set in a) */
+function maskDisjoint(a, b) {
+  const len = Math.min(a.length, b.length);
+  for (let i = 0; i < len; i++) {
+    if ((a[i] & b[i]) !== 0) return false;
+  }
+  return true;
+}
+
+/** Check: (a & b) !== 0  (any bit in b is set in a) */
+function maskOverlaps(a, b) {
+  const len = Math.min(a.length, b.length);
+  for (let i = 0; i < len; i++) {
+    if ((a[i] & b[i]) !== 0) return true;
+  }
+  return false;
+}
+
+/** Deterministic string key for a mask (used as Map key) */
+function maskKey(mask) {
+  let key = '';
+  for (let i = 0; i < mask.length; i++) {
+    if (i > 0) key += ',';
+    key += mask[i];
+  }
+  return key;
+}
+
+// ── SoA helpers ──────────────────────────────────────────
+
 function createSoAStore(schema, capacity) {
   const store = { [TYPED]: true, _schema: schema, _capacity: capacity };
   for (const [field, Ctor] of Object.entries(schema)) {
@@ -66,20 +138,23 @@ function growSnapshotStore(snap, schema, newCapacity) {
   }
 }
 
+// ── Entity Manager ───────────────────────────────────────
+
 export function createEntityManager() {
   let nextId = 1;
+  let nextArchId = 1; // unique archetype ID (not a bitmask, used by DirtyTracker)
   const allEntityIds = new Set();
 
   // Change tracking (opt-in via enableTracking)
-  let trackFilter = 0;   // bitmask — only track archetypes matching this
-  let createdSet = null;  // Set<EntityId>
-  let destroyedSet = null; // Set<EntityId>
+  let trackFilter = null;   // Uint32Array mask — only track archetypes matching this
+  let createdSet = null;     // Set<EntityId>
+  let destroyedSet = null;   // Set<EntityId>
 
   // Double-buffered snapshots: tracked archetypes get back-buffer arrays
   // Game systems write to front (normal SoA arrays), flushSnapshots copies front→back
   const trackedArchetypes = [];  // archetypes that match trackFilter
 
-  // Component bit registry (symbol → bit index 0..31)
+  // Component bit registry (symbol → bit index, no upper limit)
   const componentBitIndex = new Map();
   let nextBitIndex = 0;
 
@@ -94,15 +169,16 @@ export function createEntityManager() {
   }
 
   function computeMask(types) {
-    let mask = 0;
+    const slots = nextBitIndex > 0 ? slotsNeeded(nextBitIndex) : 1;
+    let mask = createMask(slots);
     for (const t of types) {
-      mask |= (1 << getBit(t));
+      mask = maskSetBit(mask, getBit(t));
     }
     return mask;
   }
 
-  // Archetype storage
-  const archetypes = new Map();         // bitmask → Archetype
+  // Archetype storage — keyed by mask string
+  const archetypes = new Map();         // maskKey → Archetype
   const entityArchetype = new Map();    // entityId → Archetype
 
   // Query cache
@@ -110,12 +186,14 @@ export function createEntityManager() {
   const queryCache = new Map();         // queryKey → { version, archetypes[] }
 
   function getOrCreateArchetype(types) {
-    const key = computeMask(types);
+    const mask = computeMask(types);
+    const key = maskKey(mask);
     let arch = archetypes.get(key);
     if (!arch) {
-      const tracked = trackFilter !== 0 && (key & trackFilter) !== 0;
+      const tracked = trackFilter !== null && maskOverlaps(mask, trackFilter);
       arch = {
-        key,
+        key: mask,
+        id: nextArchId++,
         types: new Set(types),
         entityIds: [],
         components: new Map(),
@@ -196,23 +274,23 @@ export function createEntityManager() {
 
   function getMatchingArchetypes(types, excludeTypes) {
     const includeMask = computeMask(types);
-    const excludeMask = excludeTypes && excludeTypes.length > 0 ? computeMask(excludeTypes) : 0;
-    const queryKey = `${includeMask}:${excludeMask}`;
+    const excludeMask = excludeTypes && excludeTypes.length > 0 ? computeMask(excludeTypes) : null;
+    const queryStr = maskKey(includeMask) + ':' + (excludeMask ? maskKey(excludeMask) : '');
 
-    const cached = queryCache.get(queryKey);
+    const cached = queryCache.get(queryStr);
     if (cached && cached.version === queryCacheVersion) {
       return cached.archetypes;
     }
 
     const matching = [];
     for (const arch of archetypes.values()) {
-      if ((arch.key & includeMask) === includeMask &&
-          (arch.key & excludeMask) === 0) {
+      if (maskContains(arch.key, includeMask) &&
+          (!excludeMask || maskDisjoint(arch.key, excludeMask))) {
         matching.push(arch);
       }
     }
 
-    queryCache.set(queryKey, { version: queryCacheVersion, archetypes: matching });
+    queryCache.set(queryStr, { version: queryCacheVersion, archetypes: matching });
     return matching;
   }
 
@@ -226,7 +304,7 @@ export function createEntityManager() {
     destroyEntity(id) {
       const arch = entityArchetype.get(id);
       if (arch) {
-        if (destroyedSet && (arch.key & trackFilter)) destroyedSet.add(id);
+        if (destroyedSet && trackFilter && maskOverlaps(arch.key, trackFilter)) destroyedSet.add(id);
         removeFromArchetype(arch, id);
       }
       allEntityIds.delete(id);
@@ -270,7 +348,7 @@ export function createEntityManager() {
       if (!arch || !arch.types.has(type)) return;
 
       // If entity is leaving a tracked archetype, treat as destroyed
-      if (destroyedSet && (arch.key & trackFilter)) destroyedSet.add(entityId);
+      if (destroyedSet && trackFilter && maskOverlaps(arch.key, trackFilter)) destroyedSet.add(entityId);
 
       if (arch.types.size === 1) {
         removeFromArchetype(arch, entityId);
@@ -357,7 +435,7 @@ export function createEntityManager() {
       const arch = getOrCreateArchetype(types);
       addToArchetype(arch, id, map);
 
-      if (createdSet && (arch.key & trackFilter)) createdSet.add(id);
+      if (createdSet && trackFilter && maskOverlaps(arch.key, trackFilter)) createdSet.add(id);
       return id;
     },
 
@@ -377,7 +455,7 @@ export function createEntityManager() {
         if (arch.count === 0) continue;
         const snaps = arch.snapshots;
         const view = {
-          id: arch.key,
+          id: arch.id,
           entityIds: arch.entityIds,
           count: arch.count,
           snapshotEntityIds: arch.snapshotEntityIds,
@@ -401,12 +479,15 @@ export function createEntityManager() {
     },
 
     enableTracking(filterComponent) {
-      trackFilter = 1 << getBit(filterComponent);
+      const bit = getBit(filterComponent);
+      const slots = slotsNeeded(bit + 1);
+      trackFilter = createMask(slots);
+      trackFilter = maskSetBit(trackFilter, bit);
       createdSet = new Set();
       destroyedSet = new Set();
       // Retroactively add snapshots to existing matching archetypes
       for (const arch of archetypes.values()) {
-        if ((arch.key & trackFilter) !== 0 && !arch.snapshots) {
+        if (maskOverlaps(arch.key, trackFilter) && !arch.snapshots) {
           arch.snapshots = new Map();
           arch.snapshotEntityIds = [];
           arch.snapshotCount = 0;
@@ -558,7 +639,7 @@ export function createEntityManager() {
         const types = Object.getOwnPropertySymbols(compMap);
         if (types.length === 0) continue;
 
-        const key = computeMask(types);
+        const key = maskKey(computeMask(types));
         if (!groupedByKey.has(key)) {
           groupedByKey.set(key, []);
         }
