@@ -74,19 +74,36 @@ function maskKey(mask) {
 
 // ── SoA helpers ──────────────────────────────────────────
 
+/** Extract the base constructor and array size from a schema entry.
+ *  Scalar: spec = Float32Array → [Float32Array, 0]
+ *  Array:  spec = [Uint16Array, 28] → [Uint16Array, 28]
+ */
+function unpackSpec(spec) {
+  if (Array.isArray(spec)) return spec;         // [Ctor, arraySize]
+  return [spec, 0];                             // scalar
+}
+
 function createSoAStore(schema, capacity) {
-  const store = { [TYPED]: true, _schema: schema, _capacity: capacity };
-  for (const [field, Ctor] of Object.entries(schema)) {
-    store[field] = new Ctor(capacity);
+  const store = { [TYPED]: true, _schema: schema, _capacity: capacity, _arraySizes: {} };
+  for (const [field, spec] of Object.entries(schema)) {
+    const [Ctor, size] = unpackSpec(spec);
+    if (size > 0) {
+      store[field] = new Ctor(capacity * size);
+      store._arraySizes[field] = size;
+    } else {
+      store[field] = new Ctor(capacity);
+    }
   }
   return store;
 }
 
 function growSoAStore(store, newCapacity) {
   store._capacity = newCapacity;
-  for (const [field, Ctor] of Object.entries(store._schema)) {
+  for (const [field, spec] of Object.entries(store._schema)) {
+    const [Ctor, size] = unpackSpec(spec);
     const old = store[field];
-    store[field] = new Ctor(newCapacity);
+    const allocSize = size > 0 ? newCapacity * size : newCapacity;
+    store[field] = new Ctor(allocSize);
     if (Ctor === Array) {
       for (let i = 0; i < old.length; i++) store[field][i] = old[i];
     } else {
@@ -97,14 +114,32 @@ function growSoAStore(store, newCapacity) {
 
 function soaWrite(store, idx, data) {
   for (const field in store._schema) {
-    store[field][idx] = data[field];
+    const size = store._arraySizes[field] || 0;
+    if (size > 0) {
+      const base = idx * size;
+      const src = data[field];
+      if (src) {
+        // Accept both arrays and TypedArray views
+        for (let j = 0; j < size; j++) {
+          store[field][base + j] = src[j] ?? 0;
+        }
+      }
+    } else {
+      store[field][idx] = data[field];
+    }
   }
 }
 
 function soaRead(store, idx) {
   const obj = {};
   for (const field in store._schema) {
-    obj[field] = store[field][idx];
+    const size = store._arraySizes[field] || 0;
+    if (size > 0) {
+      const base = idx * size;
+      obj[field] = Array.from(store[field].subarray(base, base + size));
+    } else {
+      obj[field] = store[field][idx];
+    }
   }
   return obj;
 }
@@ -112,24 +147,37 @@ function soaRead(store, idx) {
 function soaSwap(store, idxA, idxB) {
   for (const field in store._schema) {
     const arr = store[field];
-    const tmp = arr[idxA];
-    arr[idxA] = arr[idxB];
-    arr[idxB] = tmp;
+    const size = store._arraySizes[field] || 0;
+    if (size > 0) {
+      const baseA = idxA * size;
+      const baseB = idxB * size;
+      for (let j = 0; j < size; j++) {
+        const tmp = arr[baseA + j];
+        arr[baseA + j] = arr[baseB + j];
+        arr[baseB + j] = tmp;
+      }
+    } else {
+      const tmp = arr[idxA];
+      arr[idxA] = arr[idxB];
+      arr[idxB] = tmp;
+    }
   }
 }
 
 function createSnapshotStore(schema, capacity) {
   const snap = {};
-  for (const [field, Ctor] of Object.entries(schema)) {
-    snap[field] = new Ctor(capacity);
+  for (const [field, spec] of Object.entries(schema)) {
+    const [Ctor, size] = unpackSpec(spec);
+    snap[field] = new Ctor(size > 0 ? capacity * size : capacity);
   }
   return snap;
 }
 
 function growSnapshotStore(snap, schema, newCapacity) {
-  for (const [field, Ctor] of Object.entries(schema)) {
+  for (const [field, spec] of Object.entries(schema)) {
+    const [Ctor, size] = unpackSpec(spec);
     const old = snap[field];
-    snap[field] = new Ctor(newCapacity);
+    snap[field] = new Ctor(size > 0 ? newCapacity * size : newCapacity);
     if (Ctor === Array) {
       for (let i = 0; i < old.length; i++) snap[field][i] = old[i];
     } else {
@@ -386,6 +434,11 @@ export function createEntityManager() {
       const store = arch.components.get(fieldRef._sym);
       if (!store) return undefined;
       const idx = arch.entityToIndex.get(entityId);
+      const size = store._arraySizes[fieldRef._field] || 0;
+      if (size > 0) {
+        const base = idx * size;
+        return store[fieldRef._field].subarray(base, base + size);
+      }
       return store[fieldRef._field][idx];
     },
 
@@ -395,7 +448,12 @@ export function createEntityManager() {
       const store = arch.components.get(fieldRef._sym);
       if (!store) return;
       const idx = arch.entityToIndex.get(entityId);
-      store[fieldRef._field][idx] = value;
+      const size = store._arraySizes[fieldRef._field] || 0;
+      if (size > 0) {
+        store[fieldRef._field].set(value, idx * size);
+      } else {
+        store[fieldRef._field][idx] = value;
+      }
     },
 
     hasComponent(entityId, comp) {
@@ -466,6 +524,12 @@ export function createEntityManager() {
             if (!store) return undefined;
             return store[ref._field];
           },
+          fieldStride(ref) {
+            const sym = ref._sym || ref;
+            const store = arch.components.get(sym);
+            if (!store) return 1;
+            return store._arraySizes[ref._field] || 1;
+          },
           snapshot(ref) {
             if (!snaps) return undefined;
             const sym = ref._sym || ref;
@@ -525,12 +589,14 @@ export function createEntityManager() {
           for (const field in store._schema) {
             const src = store[field];
             const dst = snap[field];
+            const size = store._arraySizes[field] || 0;
+            const len = size > 0 ? count * size : count;
             if (src.set) {
               // TypedArray — use .set() for memcpy, only copy active region
-              dst.set(src.subarray(0, count));
+              dst.set(src.subarray(0, len));
             } else {
               // Regular Array (string fields)
-              for (let i = 0; i < count; i++) dst[i] = src[i];
+              for (let i = 0; i < len; i++) dst[i] = src[i];
             }
           }
         }

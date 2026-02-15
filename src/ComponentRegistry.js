@@ -12,6 +12,22 @@ export const TYPE_MAP = {
   'string': Array,
 };
 
+/**
+ * Parse a type specifier string into a TypedArray constructor (or [Ctor, arraySize] for fixed-size arrays).
+ * Examples: 'f32' → Float32Array, 'u16[28]' → [Uint16Array, 28]
+ */
+export function parseTypeSpec(typeStr) {
+  const match = typeStr.match(/^(\w+)\[(\d+)\]$/);
+  if (match) {
+    const Ctor = TYPE_MAP[match[1]];
+    if (!Ctor) throw new Error(`Unknown base type "${match[1]}"`);
+    return [Ctor, parseInt(match[2])];
+  }
+  const Ctor = TYPE_MAP[typeStr];
+  if (!Ctor) throw new Error(`Unknown type "${typeStr}"`);
+  return Ctor;
+}
+
 /** @type {Map<symbol, Record<string, typeof Float32Array>>} */
 export const componentSchemas = new Map();
 

@@ -13,7 +13,7 @@ export type ComponentDef<T = unknown> = {
   readonly _sym: symbol;
   readonly _name: string;
   readonly [__phantom]?: T;
-} & (T extends Record<string, number | string>
+} & (T extends Record<string, number | string | number[]>
   ? { readonly [K in keyof T & string]: FieldRef<T[K]> }
   : {});
 
@@ -22,15 +22,22 @@ export type Component<T = unknown> = ComponentDef<T>;
 export type ComponentType = ComponentDef;
 
 // === TypedArray schema ===
-export type TypedArrayType = 'f32' | 'f64' | 'i8' | 'i16' | 'i32' | 'u8' | 'u16' | 'u32' | 'string';
+type NumericBaseType = 'f32' | 'f64' | 'i8' | 'i16' | 'i32' | 'u8' | 'u16' | 'u32';
+export type TypedArrayType = NumericBaseType | 'string' | `${NumericBaseType}[${number}]`;
 
 export type Schema = Record<string, TypedArrayType>;
 
 /** Maps a schema type to its runtime value type */
-type FieldToType<T extends TypedArrayType> = T extends 'string' ? string : number;
+type FieldToType<T extends TypedArrayType> =
+  T extends `${string}[${string}]` ? number[]
+  : T extends 'string' ? string
+  : number;
 
 /** Maps a schema definition to its runtime value type */
 type SchemaToType<S extends Schema> = { [K in keyof S]: FieldToType<S[K]> };
+
+/** Parse a type specifier string into a constructor or [constructor, arraySize] */
+export function parseTypeSpec(typeStr: string): Function | [Function, number];
 
 export declare const TYPED: unique symbol;
 
@@ -47,6 +54,7 @@ export interface ArchetypeView {
   readonly snapshotEntityIds: EntityId[] | null;
   readonly snapshotCount: number;
   field(ref: FieldRef<any>): TypedArray | unknown[] | undefined;
+  fieldStride(ref: FieldRef<any>): number;
   snapshot(ref: FieldRef<any>): TypedArray | unknown[] | undefined;
 }
 
