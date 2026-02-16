@@ -113,6 +113,19 @@ function growSoAStore(store, newCapacity) {
 }
 
 function soaWrite(store, idx, data) {
+  if (!data) {
+    // No data provided — zero-fill all fields (supports tag-like usage of typed components)
+    for (const field in store._schema) {
+      const size = store._arraySizes[field] || 0;
+      if (size > 0) {
+        const base = idx * size;
+        for (let j = 0; j < size; j++) store[field][base + j] = 0;
+      } else {
+        store[field][idx] = 0;
+      }
+    }
+    return;
+  }
   for (const field in store._schema) {
     const size = store._arraySizes[field] || 0;
     if (size > 0) {
