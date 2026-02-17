@@ -1,38 +1,34 @@
-// Benchmark: typed (SoA TypedArrays) vs untyped (object arrays) components
+// Benchmark: forEach+field (bulk TypedArray) vs query+get/set (per-entity) vs query+getComponent (allocating)
 
-import { createEntityManager, component } from '../src/index.js';
+import { createEntityManager, component } from '../dist/src/index.js';
 
 const COUNT = 1_000_000;
 const FRAMES = 200;
 
-// --- Typed: creation ---
-function benchTypedCreate() {
-  const Pos = component('TP', 'f32', ['x', 'y']);
-  const Vel = component('TV', 'f32', ['vx', 'vy']);
+// --- forEach + field() — bulk dense TypedArray access ---
+function benchForEachField() {
+  const Pos = component('FP', 'f32', ['x', 'y']);
+  const Vel = component('FV', 'f32', ['vx', 'vy']);
   const em = createEntityManager();
 
-  const t0 = performance.now();
   for (let i = 0; i < COUNT; i++) {
     em.createEntityWith(Pos, { x: i, y: i }, Vel, { vx: 1, vy: 1 });
   }
-  return { em, Pos, Vel, time: performance.now() - t0 };
-}
 
-// --- Untyped: creation ---
-function benchUntypedCreate() {
-  const Pos = component('UP');
-  const Vel = component('UV');
-  const em = createEntityManager();
-
-  const t0 = performance.now();
-  for (let i = 0; i < COUNT; i++) {
-    em.createEntityWith(Pos, { x: i, y: i }, Vel, { vx: 1, vy: 1 });
+  // Warmup
+  for (let f = 0; f < 5; f++) {
+    em.forEach([Pos, Vel], (arch) => {
+      const px = arch.field(Pos.x);
+      const py = arch.field(Pos.y);
+      const vx = arch.field(Vel.vx);
+      const vy = arch.field(Vel.vy);
+      for (let i = 0; i < arch.count; i++) {
+        px[i] += vx[i];
+        py[i] += vy[i];
+      }
+    });
   }
-  return { em, Pos, Vel, time: performance.now() - t0 };
-}
 
-// --- Typed: iteration with forEach + field() ---
-function benchTypedIterate(em, Pos, Vel) {
   const t0 = performance.now();
   for (let f = 0; f < FRAMES; f++) {
     em.forEach([Pos, Vel], (arch) => {
@@ -49,19 +45,61 @@ function benchTypedIterate(em, Pos, Vel) {
   return (performance.now() - t0) / FRAMES;
 }
 
-// --- Untyped: iteration with forEach (object access) ---
-function benchUntypedIterate(em, Pos, Vel) {
+// --- query + get/set — per-entity field access (zero-alloc per field) ---
+function benchQueryGetSet() {
+  const Pos = component('GP', 'f32', ['x', 'y']);
+  const Vel = component('GV', 'f32', ['vx', 'vy']);
+  const em = createEntityManager();
+
+  for (let i = 0; i < COUNT; i++) {
+    em.createEntityWith(Pos, { x: i, y: i }, Vel, { vx: 1, vy: 1 });
+  }
+
+  const ids = em.query([Pos, Vel]);
+
+  // Warmup
+  for (let f = 0; f < 5; f++) {
+    for (let i = 0; i < ids.length; i++) {
+      em.set(ids[i], Pos.x, em.get(ids[i], Pos.x) + em.get(ids[i], Vel.vx));
+      em.set(ids[i], Pos.y, em.get(ids[i], Pos.y) + em.get(ids[i], Vel.vy));
+    }
+  }
+
   const t0 = performance.now();
   for (let f = 0; f < FRAMES; f++) {
-    const ids = em.query([Pos, Vel]);
     for (let i = 0; i < ids.length; i++) {
-      const pos = em.getComponent(ids[i], Pos);
-      const vel = em.getComponent(ids[i], Vel);
-      pos.x += vel.vx;
-      pos.y += vel.vy;
+      em.set(ids[i], Pos.x, em.get(ids[i], Pos.x) + em.get(ids[i], Vel.vx));
+      em.set(ids[i], Pos.y, em.get(ids[i], Pos.y) + em.get(ids[i], Vel.vy));
     }
   }
   return (performance.now() - t0) / FRAMES;
+}
+
+// --- query + getComponent — per-entity object allocation ---
+function benchQueryGetComponent() {
+  const Pos = component('CP', 'f32', ['x', 'y']);
+  const Vel = component('CV', 'f32', ['vx', 'vy']);
+  const em = createEntityManager();
+
+  for (let i = 0; i < COUNT; i++) {
+    em.createEntityWith(Pos, { x: i, y: i }, Vel, { vx: 1, vy: 1 });
+  }
+
+  const ids = em.query([Pos, Vel]);
+
+  // Only 20 frames for this one — it's very slow at 1M
+  const frames = 20;
+
+  const t0 = performance.now();
+  for (let f = 0; f < frames; f++) {
+    for (let i = 0; i < ids.length; i++) {
+      const pos = em.getComponent(ids[i], Pos);
+      const vel = em.getComponent(ids[i], Vel);
+      em.set(ids[i], Pos.x, pos.x + vel.vx);
+      em.set(ids[i], Pos.y, pos.y + vel.vy);
+    }
+  }
+  return (performance.now() - t0) / frames;
 }
 
 // --- String SoA: creation + access ---
@@ -102,65 +140,27 @@ function benchStringSoA() {
   return { createTime, forEachTime, getTime, count, count2 };
 }
 
-// --- String untyped: creation + access ---
-function benchStringUntyped() {
-  const Name = component('SUn');
-  const em = createEntityManager();
-
-  const t0 = performance.now();
-  for (let i = 0; i < COUNT; i++) {
-    em.createEntityWith(Name, { name: `entity_${i}`, tag: 'npc' });
-  }
-  const createTime = performance.now() - t0;
-
-  // getComponent access
-  const ids = em.query([Name]);
-  const t1 = performance.now();
-  let count = 0;
-  for (let f = 0; f < 50; f++) {
-    for (let i = 0; i < ids.length; i++) {
-      const n = em.getComponent(ids[i], Name);
-      if (n.name.length > 5) count++;
-    }
-  }
-  const accessTime = (performance.now() - t1) / 50;
-
-  return { createTime, accessTime, count };
-}
-
 // --- Run ---
-console.log(`\n=== Typed vs Untyped: ${(COUNT / 1e6).toFixed(0)}M entities ===\n`);
+console.log(`\n=== Access patterns: ${(COUNT / 1e6).toFixed(0)}M entities ===\n`);
 
-// Warmup
-benchTypedCreate();
-benchUntypedCreate();
+console.log(`Iteration (${FRAMES} frames, Position += Velocity):`);
+const forEachField = benchForEachField();
+console.log(`  forEach + field():            ${forEachField.toFixed(2)} ms/frame`);
 
-// Creation
-const typed = benchTypedCreate();
-const untyped = benchUntypedCreate();
+const queryGetSet = benchQueryGetSet();
+console.log(`  query + get/set:              ${queryGetSet.toFixed(2)} ms/frame`);
 
-console.log(`Creation (${(COUNT / 1e6).toFixed(0)}M entities, createEntityWith):`);
-console.log(`  typed:    ${typed.time.toFixed(0)} ms`);
-console.log(`  untyped:  ${untyped.time.toFixed(0)} ms`);
-console.log(`  ratio:    ${(untyped.time / typed.time).toFixed(2)}x`);
+const queryGetComp = benchQueryGetComponent();
+console.log(`  query + getComponent:         ${queryGetComp.toFixed(2)} ms/frame`);
 
-// Iteration
-const typedIter = benchTypedIterate(typed.em, typed.Pos, typed.Vel);
-const untypedIter = benchUntypedIterate(untyped.em, untyped.Pos, untyped.Vel);
-
-console.log(`\nIteration (${FRAMES} frames, Position += Velocity):`);
-console.log(`  typed (forEach+field):        ${typedIter.toFixed(2)} ms/frame`);
-console.log(`  untyped (query+getComponent): ${untypedIter.toFixed(2)} ms/frame`);
-console.log(`  ratio:    ${(untypedIter / typedIter).toFixed(1)}x slower`);
+console.log(`\n  forEach vs get/set:           ${(queryGetSet / forEachField).toFixed(1)}x faster`);
+console.log(`  forEach vs getComponent:      ${(queryGetComp / forEachField).toFixed(1)}x faster`);
 
 // String components
 console.log(`\nString component (${(COUNT / 1e6).toFixed(0)}M entities, { name, tag }):`);
-const strSoA = benchStringSoA();
-const strUn = benchStringUntyped();
-console.log(`  SoA create:                   ${strSoA.createTime.toFixed(0)} ms`);
-console.log(`  untyped create:               ${strUn.createTime.toFixed(0)} ms`);
-console.log(`  SoA forEach(field):           ${strSoA.forEachTime.toFixed(1)} ms/frame`);
-console.log(`  SoA get():                    ${strSoA.getTime.toFixed(1)} ms/frame`);
-console.log(`  untyped getComponent():       ${strUn.accessTime.toFixed(1)} ms/frame`);
-console.log(`  forEach vs getComponent:      ${(strUn.accessTime / strSoA.forEachTime).toFixed(1)}x faster`);
+const str = benchStringSoA();
+console.log(`  create:                       ${str.createTime.toFixed(0)} ms`);
+console.log(`  forEach(field):               ${str.forEachTime.toFixed(1)} ms/frame`);
+console.log(`  get() per entity:             ${str.getTime.toFixed(1)} ms/frame`);
+console.log(`  forEach vs get:               ${(str.getTime / str.forEachTime).toFixed(1)}x faster`);
 console.log();

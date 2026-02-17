@@ -1,42 +1,122 @@
-import { TYPED, componentSchemas, toSym } from './ComponentRegistry.js';
+import { TYPED, componentSchemas, toSym, type ComponentDef, type TypeSpec } from './ComponentRegistry.js';
+
+export type EntityId = number;
+
+export interface FieldRef {
+  readonly _sym: symbol;
+  readonly _field: string;
+}
+
+export interface ArchetypeView {
+  readonly id: number;
+  readonly entityIds: EntityId[];
+  readonly count: number;
+  readonly snapshotEntityIds: EntityId[] | null;
+  readonly snapshotCount: number;
+  field(ref: FieldRef): any;
+  fieldStride(ref: FieldRef): number;
+  snapshot(ref: FieldRef): any;
+}
+
+export interface SerializedData {
+  nextId: number;
+  entities: EntityId[];
+  components: Record<string, Record<string, unknown>>;
+}
+
+export interface EntityManager {
+  createEntity(): EntityId;
+  destroyEntity(id: EntityId): void;
+  addComponent(entityId: EntityId, type: ComponentDef, data?: any): void;
+  removeComponent(entityId: EntityId, type: ComponentDef): void;
+  getComponent(entityId: EntityId, type: ComponentDef): any;
+  get(entityId: EntityId, fieldRef: FieldRef): any;
+  set(entityId: EntityId, fieldRef: FieldRef, value: any): void;
+  hasComponent(entityId: EntityId, type: ComponentDef): boolean;
+  query(include: ComponentDef[], exclude?: ComponentDef[]): EntityId[];
+  getAllEntities(): EntityId[];
+  createEntityWith(...args: unknown[]): EntityId;
+  count(include: ComponentDef[], exclude?: ComponentDef[]): number;
+  forEach(include: ComponentDef[], callback: (view: ArchetypeView) => void, exclude?: ComponentDef[]): void;
+  onAdd(type: ComponentDef, callback: (entityId: EntityId) => void): () => void;
+  onRemove(type: ComponentDef, callback: (entityId: EntityId) => void): () => void;
+  flushHooks(): void;
+  enableTracking(filterComponent: ComponentDef): void;
+  flushChanges(): { created: Set<EntityId>; destroyed: Set<EntityId> };
+  flushSnapshots(): void;
+  serialize(
+    symbolToName: Map<symbol, string>,
+    stripComponents?: ComponentDef[],
+    skipEntitiesWith?: ComponentDef[],
+    options?: { serializers?: Map<string, (data: unknown) => unknown> }
+  ): SerializedData;
+  deserialize(
+    data: SerializedData,
+    nameToSymbol: Record<string, ComponentDef>,
+    options?: { deserializers?: Map<string, (data: unknown) => unknown> }
+  ): void;
+}
+
+// ── Internal types ───────────────────────────────────────
+
+interface SoAStore {
+  [TYPED]: true;
+  _schema: Record<string, TypeSpec>;
+  _capacity: number;
+  _arraySizes: Record<string, number>;
+  [field: string]: any;
+}
+
+type SnapshotStore = Record<string, any>;
+
+interface Archetype {
+  key: Uint32Array;
+  id: number;
+  types: Set<symbol>;
+  entityIds: EntityId[];
+  components: Map<symbol, SoAStore | null>;
+  snapshots: Map<symbol, SnapshotStore> | null;
+  snapshotEntityIds: EntityId[] | null;
+  snapshotCount: number;
+  entityToIndex: Map<EntityId, number>;
+  count: number;
+  capacity: number;
+}
+
+type HookCallback = (entityId: EntityId) => void;
+
+interface Hooks {
+  addCbs: Map<symbol, HookCallback[]>;
+  removeCbs: Map<symbol, HookCallback[]>;
+  pendingAdd: Map<symbol, EntityId[]>;
+  pendingRemove: Map<symbol, EntityId[]>;
+}
 
 const INITIAL_CAPACITY = 64;
 
 // ── Array-based bitmask helpers ──────────────────────────
 
-/** Number of u32 slots needed for the given bit count */
-function slotsNeeded(bitCount) {
+function slotsNeeded(bitCount: number): number {
   return ((bitCount - 1) >>> 5) + 1;
 }
 
-function createMask(slots) {
+function createMask(slots: number): Uint32Array {
   return new Uint32Array(slots);
 }
 
-function maskSetBit(mask, bit) {
+function maskSetBit(mask: Uint32Array, bit: number): Uint32Array {
   const slot = bit >>> 5;
-  // Grow if needed
   if (slot >= mask.length) {
     const grown = new Uint32Array(slot + 1);
     grown.set(mask);
-    mask = grown;
-    mask[slot] |= (1 << (bit & 31));
+    grown[slot] |= (1 << (bit & 31));
     return grown;
   }
   mask[slot] |= (1 << (bit & 31));
   return mask;
 }
 
-/** Ensure mask has at least `slots` length, returning a new array if grown */
-function ensureMaskSize(mask, slots) {
-  if (mask.length >= slots) return mask;
-  const grown = new Uint32Array(slots);
-  grown.set(mask);
-  return grown;
-}
-
-/** Check: (a & b) === b  (all bits in b are set in a) */
-function maskContains(a, b) {
+function maskContains(a: Uint32Array, b: Uint32Array): boolean {
   for (let i = 0; i < b.length; i++) {
     const av = i < a.length ? a[i] : 0;
     if ((av & b[i]) !== b[i]) return false;
@@ -44,8 +124,7 @@ function maskContains(a, b) {
   return true;
 }
 
-/** Check: (a & b) === 0  (no bits in b are set in a) */
-function maskDisjoint(a, b) {
+function maskDisjoint(a: Uint32Array, b: Uint32Array): boolean {
   const len = Math.min(a.length, b.length);
   for (let i = 0; i < len; i++) {
     if ((a[i] & b[i]) !== 0) return false;
@@ -53,8 +132,7 @@ function maskDisjoint(a, b) {
   return true;
 }
 
-/** Check: (a & b) !== 0  (any bit in b is set in a) */
-function maskOverlaps(a, b) {
+function maskOverlaps(a: Uint32Array, b: Uint32Array): boolean {
   const len = Math.min(a.length, b.length);
   for (let i = 0; i < len; i++) {
     if ((a[i] & b[i]) !== 0) return true;
@@ -62,8 +140,7 @@ function maskOverlaps(a, b) {
   return false;
 }
 
-/** Deterministic string key for a mask (used as Map key) */
-function maskKey(mask) {
+function maskKey(mask: Uint32Array): string {
   let key = '';
   for (let i = 0; i < mask.length; i++) {
     if (i > 0) key += ',';
@@ -74,17 +151,13 @@ function maskKey(mask) {
 
 // ── SoA helpers ──────────────────────────────────────────
 
-/** Extract the base constructor and array size from a schema entry.
- *  Scalar: spec = Float32Array → [Float32Array, 0]
- *  Array:  spec = [Uint16Array, 28] → [Uint16Array, 28]
- */
-function unpackSpec(spec) {
-  if (Array.isArray(spec)) return spec;         // [Ctor, arraySize]
-  return [spec, 0];                             // scalar
+function unpackSpec(spec: TypeSpec): [any, number] {
+  if (Array.isArray(spec)) return spec;
+  return [spec, 0];
 }
 
-function createSoAStore(schema, capacity) {
-  const store = { [TYPED]: true, _schema: schema, _capacity: capacity, _arraySizes: {} };
+function createSoAStore(schema: Record<string, TypeSpec>, capacity: number): SoAStore {
+  const store: any = { [TYPED]: true, _schema: schema, _capacity: capacity, _arraySizes: {} };
   for (const [field, spec] of Object.entries(schema)) {
     const [Ctor, size] = unpackSpec(spec);
     if (size > 0) {
@@ -97,7 +170,7 @@ function createSoAStore(schema, capacity) {
   return store;
 }
 
-function growSoAStore(store, newCapacity) {
+function growSoAStore(store: SoAStore, newCapacity: number): void {
   store._capacity = newCapacity;
   for (const [field, spec] of Object.entries(store._schema)) {
     const [Ctor, size] = unpackSpec(spec);
@@ -112,9 +185,8 @@ function growSoAStore(store, newCapacity) {
   }
 }
 
-function soaWrite(store, idx, data) {
+function soaWrite(store: SoAStore, idx: number, data: any): void {
   if (!data) {
-    // No data provided — zero-fill all fields (supports tag-like usage of typed components)
     for (const field in store._schema) {
       const size = store._arraySizes[field] || 0;
       if (size > 0) {
@@ -132,7 +204,6 @@ function soaWrite(store, idx, data) {
       const base = idx * size;
       const src = data[field];
       if (src) {
-        // Accept both arrays and TypedArray views
         for (let j = 0; j < size; j++) {
           store[field][base + j] = src[j] ?? 0;
         }
@@ -143,8 +214,8 @@ function soaWrite(store, idx, data) {
   }
 }
 
-function soaRead(store, idx) {
-  const obj = {};
+function soaRead(store: SoAStore, idx: number): Record<string, any> {
+  const obj: Record<string, any> = {};
   for (const field in store._schema) {
     const size = store._arraySizes[field] || 0;
     if (size > 0) {
@@ -157,7 +228,7 @@ function soaRead(store, idx) {
   return obj;
 }
 
-function soaSwap(store, idxA, idxB) {
+function soaSwap(store: SoAStore, idxA: number, idxB: number): void {
   for (const field in store._schema) {
     const arr = store[field];
     const size = store._arraySizes[field] || 0;
@@ -177,8 +248,8 @@ function soaSwap(store, idxA, idxB) {
   }
 }
 
-function createSnapshotStore(schema, capacity) {
-  const snap = {};
+function createSnapshotStore(schema: Record<string, TypeSpec>, capacity: number): SnapshotStore {
+  const snap: SnapshotStore = {};
   for (const [field, spec] of Object.entries(schema)) {
     const [Ctor, size] = unpackSpec(spec);
     snap[field] = new Ctor(size > 0 ? capacity * size : capacity);
@@ -186,7 +257,7 @@ function createSnapshotStore(schema, capacity) {
   return snap;
 }
 
-function growSnapshotStore(snap, schema, newCapacity) {
+function growSnapshotStore(snap: SnapshotStore, schema: Record<string, TypeSpec>, newCapacity: number): void {
   for (const [field, spec] of Object.entries(schema)) {
     const [Ctor, size] = unpackSpec(spec);
     const old = snap[field];
@@ -201,25 +272,22 @@ function growSnapshotStore(snap, schema, newCapacity) {
 
 // ── Entity Manager ───────────────────────────────────────
 
-export function createEntityManager() {
-  let nextId = 1;
-  let nextArchId = 1; // unique archetype ID (not a bitmask, used by DirtyTracker)
-  const allEntityIds = new Set();
+export function createEntityManager(): EntityManager {
+  let nextId: EntityId = 1;
+  let nextArchId = 1;
+  const allEntityIds = new Set<EntityId>();
 
-  // Change tracking (opt-in via enableTracking)
-  let trackFilter = null;   // Uint32Array mask — only track archetypes matching this
-  let createdSet = null;     // Set<EntityId>
-  let destroyedSet = null;   // Set<EntityId>
+  let trackFilter: Uint32Array | null = null;
+  let createdSet: Set<EntityId> | null = null;
+  let destroyedSet: Set<EntityId> | null = null;
+  const trackedArchetypes: Archetype[] = [];
 
-  // Double-buffered snapshots: tracked archetypes get back-buffer arrays
-  // Game systems write to front (normal SoA arrays), flushSnapshots copies front→back
-  const trackedArchetypes = [];  // archetypes that match trackFilter
+  let hooks: Hooks | null = null;
 
-  // Component bit registry (symbol → bit index, no upper limit)
-  const componentBitIndex = new Map();
+  const componentBitIndex = new Map<symbol, number>();
   let nextBitIndex = 0;
 
-  function getBit(type) {
+  function getBit(type: symbol | ComponentDef): number {
     const sym = toSym(type);
     let bit = componentBitIndex.get(sym);
     if (bit === undefined) {
@@ -229,7 +297,7 @@ export function createEntityManager() {
     return bit;
   }
 
-  function computeMask(types) {
+  function computeMask(types: (symbol | ComponentDef)[]): Uint32Array {
     const slots = nextBitIndex > 0 ? slotsNeeded(nextBitIndex) : 1;
     let mask = createMask(slots);
     for (const t of types) {
@@ -238,15 +306,13 @@ export function createEntityManager() {
     return mask;
   }
 
-  // Archetype storage — keyed by mask string
-  const archetypes = new Map();         // maskKey → Archetype
-  const entityArchetype = new Map();    // entityId → Archetype
+  const archetypes = new Map<string, Archetype>();
+  const entityArchetype = new Map<EntityId, Archetype>();
 
-  // Query cache
   let queryCacheVersion = 0;
-  const queryCache = new Map();         // queryKey → { version, archetypes[] }
+  const queryCache = new Map<string, { version: number; archetypes: Archetype[] }>();
 
-  function getOrCreateArchetype(types) {
+  function getOrCreateArchetype(types: symbol[]): Archetype {
     const mask = computeMask(types);
     const key = maskKey(mask);
     let arch = archetypes.get(key);
@@ -270,7 +336,7 @@ export function createEntityManager() {
         const store = schema ? createSoAStore(schema, INITIAL_CAPACITY) : null;
         arch.components.set(t, store);
         if (tracked && store) {
-          arch.snapshots.set(t, createSnapshotStore(schema, INITIAL_CAPACITY));
+          arch.snapshots!.set(t, createSnapshotStore(schema!, INITIAL_CAPACITY));
         }
       }
       archetypes.set(key, arch);
@@ -280,7 +346,7 @@ export function createEntityManager() {
     return arch;
   }
 
-  function ensureCapacity(arch) {
+  function ensureCapacity(arch: Archetype): void {
     if (arch.count < arch.capacity) return;
     const newCap = arch.capacity * 2;
     arch.capacity = newCap;
@@ -295,27 +361,27 @@ export function createEntityManager() {
     }
   }
 
-  function addToArchetype(arch, entityId, componentMap) {
+  function addToArchetype(arch: Archetype, entityId: EntityId, componentMap: Record<symbol, any>): void {
     ensureCapacity(arch);
     const idx = arch.count;
     arch.entityIds[idx] = entityId;
     for (const t of arch.types) {
       const store = arch.components.get(t);
-      if (store) soaWrite(store, idx, componentMap[t]);
+      if (store) soaWrite(store, idx, (componentMap as any)[t]);
     }
     arch.entityToIndex.set(entityId, idx);
     arch.count++;
     entityArchetype.set(entityId, arch);
   }
 
-  function removeFromArchetype(arch, entityId) {
-    const idx = arch.entityToIndex.get(entityId);
+  function removeFromArchetype(arch: Archetype, entityId: EntityId): void {
+    const idx = arch.entityToIndex.get(entityId)!;
     const lastIdx = arch.count - 1;
 
     if (idx !== lastIdx) {
       const lastEntity = arch.entityIds[lastIdx];
       arch.entityIds[idx] = lastEntity;
-      for (const [type, store] of arch.components) {
+      for (const [, store] of arch.components) {
         if (store) soaSwap(store, idx, lastIdx);
       }
       arch.entityToIndex.set(lastEntity, idx);
@@ -327,13 +393,13 @@ export function createEntityManager() {
     entityArchetype.delete(entityId);
   }
 
-  function readComponentData(arch, type, idx) {
+  function readComponentData(arch: Archetype, type: symbol, idx: number): any {
     const store = arch.components.get(type);
     if (!store) return undefined;
     return soaRead(store, idx);
   }
 
-  function getMatchingArchetypes(types, excludeTypes) {
+  function getMatchingArchetypes(types: (symbol | ComponentDef)[], excludeTypes?: (symbol | ComponentDef)[]): Archetype[] {
     const includeMask = computeMask(types);
     const excludeMask = excludeTypes && excludeTypes.length > 0 ? computeMask(excludeTypes) : null;
     const queryStr = maskKey(includeMask) + ':' + (excludeMask ? maskKey(excludeMask) : '');
@@ -343,7 +409,7 @@ export function createEntityManager() {
       return cached.archetypes;
     }
 
-    const matching = [];
+    const matching: Archetype[] = [];
     for (const arch of archetypes.values()) {
       if (maskContains(arch.key, includeMask) &&
           (!excludeMask || maskDisjoint(arch.key, excludeMask))) {
@@ -356,35 +422,45 @@ export function createEntityManager() {
   }
 
   return {
-    createEntity() {
+    createEntity(): EntityId {
       const id = nextId++;
       allEntityIds.add(id);
       return id;
     },
 
-    destroyEntity(id) {
+    destroyEntity(id: EntityId): void {
       const arch = entityArchetype.get(id);
       if (arch) {
+        if (hooks) {
+          for (const type of arch.types) {
+            const pending = hooks.pendingRemove.get(type);
+            if (pending) pending.push(id);
+          }
+        }
         if (destroyedSet && trackFilter && maskOverlaps(arch.key, trackFilter)) destroyedSet.add(id);
         removeFromArchetype(arch, id);
       }
       allEntityIds.delete(id);
     },
 
-    addComponent(entityId, comp, data) {
+    addComponent(entityId: EntityId, comp: ComponentDef, data?: any): void {
       const type = toSym(comp);
       const arch = entityArchetype.get(entityId);
 
       if (!arch) {
         const newArch = getOrCreateArchetype([type]);
-        addToArchetype(newArch, entityId, { [type]: data });
+        addToArchetype(newArch, entityId, { [type as unknown as string]: data });
+        if (hooks) {
+          const pending = hooks.pendingAdd.get(type);
+          if (pending) pending.push(entityId);
+        }
         return;
       }
 
       if (arch.types.has(type)) {
         const store = arch.components.get(type);
         if (store) {
-          const idx = arch.entityToIndex.get(entityId);
+          const idx = arch.entityToIndex.get(entityId)!;
           soaWrite(store, idx, data);
         }
         return;
@@ -393,22 +469,30 @@ export function createEntityManager() {
       const newTypes = [...arch.types, type];
       const newArch = getOrCreateArchetype(newTypes);
 
-      const idx = arch.entityToIndex.get(entityId);
-      const map = { [type]: data };
+      const idx = arch.entityToIndex.get(entityId)!;
+      const map: any = { [type as unknown as string]: data };
       for (const t of arch.types) {
-        map[t] = readComponentData(arch, t, idx);
+        map[t as unknown as string] = readComponentData(arch, t, idx);
       }
 
       removeFromArchetype(arch, entityId);
       addToArchetype(newArch, entityId, map);
+      if (hooks) {
+        const pending = hooks.pendingAdd.get(type);
+        if (pending) pending.push(entityId);
+      }
     },
 
-    removeComponent(entityId, comp) {
+    removeComponent(entityId: EntityId, comp: ComponentDef): void {
       const type = toSym(comp);
       const arch = entityArchetype.get(entityId);
       if (!arch || !arch.types.has(type)) return;
 
-      // If entity is leaving a tracked archetype, treat as destroyed
+      if (hooks) {
+        const pending = hooks.pendingRemove.get(type);
+        if (pending) pending.push(entityId);
+      }
+
       if (destroyedSet && trackFilter && maskOverlaps(arch.key, trackFilter)) destroyedSet.add(entityId);
 
       if (arch.types.size === 1) {
@@ -416,23 +500,23 @@ export function createEntityManager() {
         return;
       }
 
-      const newTypes = [];
+      const newTypes: symbol[] = [];
       for (const t of arch.types) {
         if (t !== type) newTypes.push(t);
       }
       const newArch = getOrCreateArchetype(newTypes);
 
-      const idx = arch.entityToIndex.get(entityId);
-      const map = {};
+      const idx = arch.entityToIndex.get(entityId)!;
+      const map: any = {};
       for (const t of newTypes) {
-        map[t] = readComponentData(arch, t, idx);
+        map[t as unknown as string] = readComponentData(arch, t, idx);
       }
 
       removeFromArchetype(arch, entityId);
       addToArchetype(newArch, entityId, map);
     },
 
-    getComponent(entityId, comp) {
+    getComponent(entityId: EntityId, comp: ComponentDef): any {
       const type = toSym(comp);
       const arch = entityArchetype.get(entityId);
       if (!arch) return undefined;
@@ -441,12 +525,12 @@ export function createEntityManager() {
       return readComponentData(arch, type, idx);
     },
 
-    get(entityId, fieldRef) {
+    get(entityId: EntityId, fieldRef: FieldRef): any {
       const arch = entityArchetype.get(entityId);
       if (!arch) return undefined;
       const store = arch.components.get(fieldRef._sym);
       if (!store) return undefined;
-      const idx = arch.entityToIndex.get(entityId);
+      const idx = arch.entityToIndex.get(entityId)!;
       const size = store._arraySizes[fieldRef._field] || 0;
       if (size > 0) {
         const base = idx * size;
@@ -455,12 +539,12 @@ export function createEntityManager() {
       return store[fieldRef._field][idx];
     },
 
-    set(entityId, fieldRef, value) {
+    set(entityId: EntityId, fieldRef: FieldRef, value: any): void {
       const arch = entityArchetype.get(entityId);
       if (!arch) return;
       const store = arch.components.get(fieldRef._sym);
       if (!store) return;
-      const idx = arch.entityToIndex.get(entityId);
+      const idx = arch.entityToIndex.get(entityId)!;
       const size = store._arraySizes[fieldRef._field] || 0;
       if (size > 0) {
         store[fieldRef._field].set(value, idx * size);
@@ -469,15 +553,15 @@ export function createEntityManager() {
       }
     },
 
-    hasComponent(entityId, comp) {
+    hasComponent(entityId: EntityId, comp: ComponentDef): boolean {
       const type = toSym(comp);
       const arch = entityArchetype.get(entityId);
       return arch ? arch.types.has(type) : false;
     },
 
-    query(includeTypes, excludeTypes) {
+    query(includeTypes: ComponentDef[], excludeTypes?: ComponentDef[]): EntityId[] {
       const matching = getMatchingArchetypes(includeTypes, excludeTypes);
-      const result = [];
+      const result: EntityId[] = [];
       for (let a = 0; a < matching.length; a++) {
         const arch = matching[a];
         const ids = arch.entityIds;
@@ -488,29 +572,36 @@ export function createEntityManager() {
       return result;
     },
 
-    getAllEntities() {
+    getAllEntities(): EntityId[] {
       return [...allEntityIds];
     },
 
-    createEntityWith(...args) {
+    createEntityWith(...args: unknown[]): EntityId {
       const id = nextId++;
       allEntityIds.add(id);
 
-      const types = [];
-      const map = {};
+      const types: symbol[] = [];
+      const map: any = {};
       for (let i = 0; i < args.length; i += 2) {
-        const sym = toSym(args[i]);
+        const sym = toSym(args[i] as ComponentDef);
         types.push(sym);
-        map[sym] = args[i + 1];
+        map[sym as unknown as string] = args[i + 1];
       }
       const arch = getOrCreateArchetype(types);
       addToArchetype(arch, id, map);
+
+      if (hooks) {
+        for (let i = 0; i < types.length; i++) {
+          const pending = hooks.pendingAdd.get(types[i]);
+          if (pending) pending.push(id);
+        }
+      }
 
       if (createdSet && trackFilter && maskOverlaps(arch.key, trackFilter)) createdSet.add(id);
       return id;
     },
 
-    count(includeTypes, excludeTypes) {
+    count(includeTypes: ComponentDef[], excludeTypes?: ComponentDef[]): number {
       const matching = getMatchingArchetypes(includeTypes, excludeTypes);
       let total = 0;
       for (let a = 0; a < matching.length; a++) {
@@ -519,34 +610,34 @@ export function createEntityManager() {
       return total;
     },
 
-    forEach(includeTypes, callback, excludeTypes) {
+    forEach(includeTypes: ComponentDef[], callback: (view: ArchetypeView) => void, excludeTypes?: ComponentDef[]): void {
       const matching = getMatchingArchetypes(includeTypes, excludeTypes);
       for (let a = 0; a < matching.length; a++) {
         const arch = matching[a];
         if (arch.count === 0) continue;
         const snaps = arch.snapshots;
-        const view = {
+        const view: ArchetypeView = {
           id: arch.id,
           entityIds: arch.entityIds,
           count: arch.count,
           snapshotEntityIds: arch.snapshotEntityIds,
           snapshotCount: arch.snapshotCount,
-          field(ref) {
+          field(ref: FieldRef) {
             const sym = ref._sym || ref;
-            const store = arch.components.get(sym);
+            const store = arch.components.get(sym as symbol);
             if (!store) return undefined;
             return store[ref._field];
           },
-          fieldStride(ref) {
+          fieldStride(ref: FieldRef) {
             const sym = ref._sym || ref;
-            const store = arch.components.get(sym);
+            const store = arch.components.get(sym as symbol);
             if (!store) return 1;
             return store._arraySizes[ref._field] || 1;
           },
-          snapshot(ref) {
+          snapshot(ref: FieldRef) {
             if (!snaps) return undefined;
             const sym = ref._sym || ref;
-            const snap = snaps.get(sym);
+            const snap = snaps.get(sym as symbol);
             if (!snap) return undefined;
             return snap[ref._field];
           }
@@ -555,14 +646,13 @@ export function createEntityManager() {
       }
     },
 
-    enableTracking(filterComponent) {
+    enableTracking(filterComponent: ComponentDef): void {
       const bit = getBit(filterComponent);
       const slots = slotsNeeded(bit + 1);
       trackFilter = createMask(slots);
       trackFilter = maskSetBit(trackFilter, bit);
       createdSet = new Set();
       destroyedSet = new Set();
-      // Retroactively add snapshots to existing matching archetypes
       for (const arch of archetypes.values()) {
         if (maskOverlaps(arch.key, trackFilter) && !arch.snapshots) {
           arch.snapshots = new Map();
@@ -579,25 +669,23 @@ export function createEntityManager() {
     },
 
     flushChanges() {
-      const result = { created: createdSet, destroyed: destroyedSet };
+      const result = { created: createdSet!, destroyed: destroyedSet! };
       createdSet = new Set();
       destroyedSet = new Set();
       return result;
     },
 
-    flushSnapshots() {
+    flushSnapshots(): void {
       for (let a = 0; a < trackedArchetypes.length; a++) {
         const arch = trackedArchetypes[a];
         const count = arch.count;
-        // Copy entityIds
         const eids = arch.entityIds;
-        const snapEids = arch.snapshotEntityIds;
+        const snapEids = arch.snapshotEntityIds!;
         for (let i = 0; i < count; i++) snapEids[i] = eids[i];
         arch.snapshotCount = count;
-        // Copy all field arrays via .set() (one memcpy per field)
         for (const [type, store] of arch.components) {
           if (!store) continue;
-          const snap = arch.snapshots.get(type);
+          const snap = arch.snapshots!.get(type);
           if (!snap) continue;
           for (const field in store._schema) {
             const src = store[field];
@@ -605,10 +693,8 @@ export function createEntityManager() {
             const size = store._arraySizes[field] || 0;
             const len = size > 0 ? count * size : count;
             if (src.set) {
-              // TypedArray — use .set() for memcpy, only copy active region
               dst.set(src.subarray(0, len));
             } else {
-              // Regular Array (string fields)
               for (let i = 0; i < len; i++) dst[i] = src[i];
             }
           }
@@ -616,10 +702,91 @@ export function createEntityManager() {
       }
     },
 
-    serialize(symbolToName, stripComponents = [], skipEntitiesWith = [], { serializers } = {}) {
+    onAdd(comp: ComponentDef, callback: HookCallback): () => void {
+      const type = toSym(comp);
+      if (!hooks) {
+        hooks = {
+          addCbs: new Map(),
+          removeCbs: new Map(),
+          pendingAdd: new Map(),
+          pendingRemove: new Map(),
+        };
+      }
+      if (!hooks.addCbs.has(type)) {
+        hooks.addCbs.set(type, []);
+        hooks.pendingAdd.set(type, []);
+      }
+      hooks.addCbs.get(type)!.push(callback);
+      return () => {
+        const cbs = hooks && hooks.addCbs.get(type);
+        if (!cbs) return;
+        const idx = cbs.indexOf(callback);
+        if (idx !== -1) cbs.splice(idx, 1);
+        if (cbs.length === 0) {
+          hooks!.addCbs.delete(type);
+          hooks!.pendingAdd.delete(type);
+        }
+        if (hooks!.addCbs.size === 0 && hooks!.removeCbs.size === 0) hooks = null;
+      };
+    },
+
+    onRemove(comp: ComponentDef, callback: HookCallback): () => void {
+      const type = toSym(comp);
+      if (!hooks) {
+        hooks = {
+          addCbs: new Map(),
+          removeCbs: new Map(),
+          pendingAdd: new Map(),
+          pendingRemove: new Map(),
+        };
+      }
+      if (!hooks.removeCbs.has(type)) {
+        hooks.removeCbs.set(type, []);
+        hooks.pendingRemove.set(type, []);
+      }
+      hooks.removeCbs.get(type)!.push(callback);
+      return () => {
+        const cbs = hooks && hooks.removeCbs.get(type);
+        if (!cbs) return;
+        const idx = cbs.indexOf(callback);
+        if (idx !== -1) cbs.splice(idx, 1);
+        if (cbs.length === 0) {
+          hooks!.removeCbs.delete(type);
+          hooks!.pendingRemove.delete(type);
+        }
+        if (hooks!.addCbs.size === 0 && hooks!.removeCbs.size === 0) hooks = null;
+      };
+    },
+
+    flushHooks(): void {
+      if (!hooks) return;
+      for (const [sym, pending] of hooks.pendingAdd) {
+        if (pending.length === 0) continue;
+        const cbs = hooks.addCbs.get(sym)!;
+        for (let c = 0; c < cbs.length; c++) {
+          for (let i = 0; i < pending.length; i++) cbs[c](pending[i]);
+        }
+        pending.length = 0;
+      }
+      for (const [sym, pending] of hooks.pendingRemove) {
+        if (pending.length === 0) continue;
+        const cbs = hooks.removeCbs.get(sym)!;
+        for (let c = 0; c < cbs.length; c++) {
+          for (let i = 0; i < pending.length; i++) cbs[c](pending[i]);
+        }
+        pending.length = 0;
+      }
+    },
+
+    serialize(
+      symbolToName: Map<symbol, string>,
+      stripComponents: ComponentDef[] = [],
+      skipEntitiesWith: ComponentDef[] = [],
+      { serializers }: { serializers?: Map<string, (data: unknown) => unknown> } = {}
+    ): SerializedData {
       const stripSymbols = new Set(stripComponents.map(toSym));
       const skipSymbols = new Set(skipEntitiesWith.map(toSym));
-      const skipEntityIds = new Set();
+      const skipEntityIds = new Set<EntityId>();
 
       if (skipSymbols.size > 0) {
         for (const arch of archetypes.values()) {
@@ -634,7 +801,7 @@ export function createEntityManager() {
         }
       }
 
-      const serializedComponents = {};
+      const serializedComponents: Record<string, Record<string, unknown>> = {};
 
       for (const arch of archetypes.values()) {
         for (const [sym, store] of arch.components) {
@@ -665,7 +832,7 @@ export function createEntityManager() {
         }
       }
 
-      const serializedEntities = [];
+      const serializedEntities: EntityId[] = [];
       for (const id of allEntityIds) {
         if (!skipEntityIds.has(id)) serializedEntities.push(id);
       }
@@ -677,7 +844,11 @@ export function createEntityManager() {
       };
     },
 
-    deserialize(data, nameToSymbol, { deserializers } = {}) {
+    deserialize(
+      data: SerializedData,
+      nameToSymbol: Record<string, ComponentDef>,
+      { deserializers }: { deserializers?: Map<string, (data: unknown) => unknown> } = {}
+    ): void {
       allEntityIds.clear();
       archetypes.clear();
       entityArchetype.clear();
@@ -686,7 +857,7 @@ export function createEntityManager() {
 
       nextId = data.nextId;
 
-      const entityComponents = new Map();
+      const entityComponents = new Map<EntityId, any>();
 
       for (const id of data.entities) {
         allEntityIds.add(id);
@@ -700,7 +871,7 @@ export function createEntityManager() {
 
         const customDeserializer = deserializers && deserializers.get(name);
 
-        for (const [entityIdStr, compData] of Object.entries(store)) {
+        for (const [entityIdStr, compData] of Object.entries(store as Record<string, unknown>)) {
           const entityId = Number(entityIdStr);
           const obj = entityComponents.get(entityId);
           if (!obj) continue;
@@ -713,7 +884,7 @@ export function createEntityManager() {
         }
       }
 
-      const groupedByKey = new Map();
+      const groupedByKey = new Map<string, { entityId: EntityId; compMap: any }[]>();
       for (const [entityId, compMap] of entityComponents) {
         const types = Object.getOwnPropertySymbols(compMap);
         if (types.length === 0) continue;
@@ -722,10 +893,10 @@ export function createEntityManager() {
         if (!groupedByKey.has(key)) {
           groupedByKey.set(key, []);
         }
-        groupedByKey.get(key).push({ entityId, compMap });
+        groupedByKey.get(key)!.push({ entityId, compMap });
       }
 
-      for (const [key, entries] of groupedByKey) {
+      for (const [, entries] of groupedByKey) {
         const types = Object.getOwnPropertySymbols(entries[0].compMap);
         const arch = getOrCreateArchetype(types);
 

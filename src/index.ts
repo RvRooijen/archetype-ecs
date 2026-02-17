@@ -1,17 +1,21 @@
 export { createEntityManager } from './EntityManager.js';
+export type { EntityId, FieldRef, ArchetypeView, EntityManager, SerializedData } from './EntityManager.js';
+export { createSystem, createSystems, System, OnAdded, OnRemoved } from './System.js';
+export type { SystemContext, FunctionalSystemConstructor, FunctionalSystem, Pipeline } from './System.js';
 export { profiler } from './Profiler.js';
+export type { Profiler, ProfilerEntry } from './Profiler.js';
 export { TYPED, componentSchemas, parseTypeSpec } from './ComponentRegistry.js';
-import { parseTypeSpec, componentSchemas } from './ComponentRegistry.js';
+export type { ComponentDef, TypeSpec } from './ComponentRegistry.js';
 
-export function component(name, typeOrSchema, fields) {
+import { parseTypeSpec, componentSchemas, type ComponentDef, type TypeSpec } from './ComponentRegistry.js';
+
+export function component(name: string, typeOrSchema?: string | Record<string, string>, fields?: string[]): ComponentDef {
   const sym = Symbol(name);
-  const comp = { _sym: sym, _name: name };
+  const comp: any = { _sym: sym, _name: name };
 
-  let schema;
+  let schema: Record<string, TypeSpec> | undefined;
 
   if (typeof typeOrSchema === 'string' && Array.isArray(fields)) {
-    // Short form: component('Position', 'f32', ['x', 'y'])
-    // Also supports array types: component('Slots', 'u16[28]', ['a', 'b'])
     const spec = parseTypeSpec(typeOrSchema);
     schema = {};
     for (const f of fields) {
@@ -19,7 +23,6 @@ export function component(name, typeOrSchema, fields) {
       comp[f] = { _sym: sym, _field: f };
     }
   } else if (typeOrSchema && typeof typeOrSchema === 'object') {
-    // Schema form: component('Inventory', { items: 'u16[28]', count: 'u8' })
     schema = {};
     for (const [field, type] of Object.entries(typeOrSchema)) {
       schema[field] = parseTypeSpec(type);
