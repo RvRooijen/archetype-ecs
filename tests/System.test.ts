@@ -177,6 +177,46 @@ describe('createSystem (functional)', () => {
     sys.dispose();
   });
 
+  it('onRemoved handler can read removed component data via get()', () => {
+    const hpValues: number[] = [];
+    const sys = createSystem(em, (s) => {
+      s.onRemoved(Health, (id: EntityId) => {
+        hpValues.push(em.get(id, Health.hp) as number);
+      });
+    });
+
+    const e1 = em.createEntityWith(Health, { hp: 77 });
+    em.flushHooks();
+    sys();
+
+    em.removeComponent(e1, Health);
+    em.flushHooks();
+    sys();
+
+    assert.ok(Math.abs(hpValues[0] - 77) < 0.001);
+    sys.dispose();
+  });
+
+  it('onRemoved handler can read data of destroyed entity', () => {
+    const hpValues: number[] = [];
+    const sys = createSystem(em, (s) => {
+      s.onRemoved(Health, (id: EntityId) => {
+        hpValues.push(em.get(id, Health.hp) as number);
+      });
+    });
+
+    const e1 = em.createEntityWith(Health, { hp: 55 });
+    em.flushHooks();
+    sys();
+
+    em.destroyEntity(e1);
+    em.flushHooks();
+    sys();
+
+    assert.ok(Math.abs(hpValues[0] - 55) < 0.001);
+    sys.dispose();
+  });
+
   it('query-only system (no hooks) works', () => {
     const e1 = em.createEntity();
     em.addComponent(e1, Position, { x: 10, y: 20 });
@@ -420,6 +460,97 @@ describe('System (class + decorators)', () => {
     sys.dispose();
   });
 
+  it('@OnRemoved handler can read removed component data via get()', () => {
+    const hpValues: number[] = [];
+
+    class TestSys extends System {
+      @OnRemoved(Health)
+      handleRemove(id: EntityId) {
+        hpValues.push(this.em.get(id, Health.hp) as number);
+      }
+    }
+
+    const sys = new TestSys(em);
+    const e1 = em.createEntityWith(Health, { hp: 42 });
+    em.flushHooks();
+    sys.run();
+
+    em.removeComponent(e1, Health);
+    em.flushHooks();
+    sys.run();
+
+    assert.ok(Math.abs(hpValues[0] - 42) < 0.001);
+    sys.dispose();
+  });
+
+  it('@OnRemoved handler can read data of destroyed entity via get()', () => {
+    const hpValues: number[] = [];
+
+    class TestSys extends System {
+      @OnRemoved(Health)
+      handleRemove(id: EntityId) {
+        hpValues.push(this.em.get(id, Health.hp) as number);
+      }
+    }
+
+    const sys = new TestSys(em);
+    const e1 = em.createEntityWith(Health, { hp: 99 });
+    em.flushHooks();
+    sys.run();
+
+    em.destroyEntity(e1);
+    em.flushHooks();
+    sys.run();
+
+    assert.ok(Math.abs(hpValues[0] - 99) < 0.001);
+    sys.dispose();
+  });
+
+  it('@OnRemoved handler can read data via getComponent()', () => {
+    const results: Record<string, number | string | number[]>[] = [];
+
+    class TestSys extends System {
+      @OnRemoved(Position)
+      handleRemove(id: EntityId) {
+        const comp = this.em.getComponent(id, Position);
+        if (comp) results.push(comp);
+      }
+    }
+
+    const sys = new TestSys(em);
+    const e1 = em.createEntityWith(Position, { x: 10, y: 20 });
+    em.flushHooks();
+    sys.run();
+
+    em.removeComponent(e1, Position);
+    em.flushHooks();
+    sys.run();
+
+    assert.ok(Math.abs(results[0].x as number - 10) < 0.001);
+    assert.ok(Math.abs(results[0].y as number - 20) < 0.001);
+    sys.dispose();
+  });
+
+  it('removed data is cleared after commitRemovals (via run())', () => {
+    class TestSys extends System {
+      @OnRemoved(Health)
+      handleRemove(_id: EntityId) {}
+    }
+
+    const sys = new TestSys(em);
+    const e1 = em.createEntityWith(Health, { hp: 42 });
+    em.flushHooks();
+    sys.run();
+
+    em.removeComponent(e1, Health);
+    em.flushHooks();
+    sys.run(); // calls commitRemovals internally
+
+    // After run(), removed data should be cleared
+    assert.equal(em.get(e1, Health.hp), undefined);
+    sys.dispose();
+  });
+
   it('multiple instances have independent buffers', () => {
     const collectedA: EntityId[] = [];
     const collectedB: EntityId[] = [];
@@ -512,6 +643,59 @@ describe('createSystems', () => {
     em.flushHooks();
     pipeline();
     assert.deepEqual(collected, []);
+  });
+
+  it('@OnRemoved in pipeline can access removed data', () => {
+    const hpValues: number[] = [];
+
+    class DeathSys extends System {
+      @OnRemoved(Health)
+      handleRemove(id: EntityId) {
+        hpValues.push(this.em.get(id, Health.hp) as number);
+      }
+    }
+
+    const pipeline = createSystems(em, [DeathSys]);
+    const e1 = em.createEntityWith(Health, { hp: 77 });
+    em.flushHooks();
+    pipeline();
+
+    em.removeComponent(e1, Health);
+    em.flushHooks();
+    pipeline();
+
+    assert.ok(Math.abs(hpValues[0] - 77) < 0.001);
+    // Data should be cleared after pipeline (commitRemovals)
+    assert.equal(em.get(e1, Health.hp), undefined);
+    pipeline.dispose();
+  });
+
+  it('multiple systems in pipeline all see removed data', () => {
+    const hpA: number[] = [];
+    const hpB: number[] = [];
+
+    class SysA extends System {
+      @OnRemoved(Health)
+      handle(id: EntityId) { hpA.push(this.em.get(id, Health.hp) as number); }
+    }
+
+    class SysB extends System {
+      @OnRemoved(Health)
+      handle(id: EntityId) { hpB.push(this.em.get(id, Health.hp) as number); }
+    }
+
+    const pipeline = createSystems(em, [SysA, SysB]);
+    const e1 = em.createEntityWith(Health, { hp: 33 });
+    em.flushHooks();
+    pipeline();
+
+    em.destroyEntity(e1);
+    em.flushHooks();
+    pipeline();
+
+    assert.ok(Math.abs(hpA[0] - 33) < 0.001);
+    assert.ok(Math.abs(hpB[0] - 33) < 0.001);
+    pipeline.dispose();
   });
 
   it('class hooks fire through pipeline', () => {

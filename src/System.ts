@@ -70,12 +70,18 @@ export class System {
 
   tick?(): void;
 
-  run(): void {
+  /** Process hooks and tick without clearing removed-data snapshots. */
+  _runCore(): void {
     for (const hook of this._hooks) {
       for (const id of hook.buffer) hook.handler(id);
       hook.buffer.clear();
     }
     if (this.tick) this.tick();
+  }
+
+  run(): void {
+    this._runCore();
+    this.em.commitRemovals();
   }
 
   dispose(): void {
@@ -105,6 +111,8 @@ interface FunctionalHook {
 
 export interface FunctionalSystem {
   (): void;
+  /** @internal Process hooks and tick without clearing removed-data snapshots. */
+  _runCore(): void;
   dispose(): void;
 }
 
@@ -154,13 +162,20 @@ export function createSystem(em: EntityManager, constructor: FunctionalSystemCon
 
   const tick = constructor(sys);
 
-  function system() {
+  function runCore() {
     for (const hook of hooks) {
       for (const id of hook.buffer) hook.callback(id);
       hook.buffer.clear();
     }
     if (tick) tick();
   }
+
+  function system() {
+    runCore();
+    em.commitRemovals();
+  }
+
+  system._runCore = runCore;
 
   system.dispose = function () {
     for (const hook of hooks) {
@@ -175,7 +190,7 @@ export function createSystem(em: EntityManager, constructor: FunctionalSystemCon
 // ── Activator ────────────────────────────────────────────
 
 interface Runnable {
-  run(): void;
+  _runCore(): void;
   dispose(): void;
 }
 
@@ -199,11 +214,12 @@ export function createSystems(em: EntityManager, entries: (FunctionalSystemConst
       return new Entry(em);
     }
     const sys = createSystem(em, Entry as FunctionalSystemConstructor);
-    return { run: sys, dispose: sys.dispose };
+    return { _runCore: sys._runCore, dispose: sys.dispose };
   });
 
   function pipeline() {
-    for (let i = 0; i < systems.length; i++) systems[i].run();
+    for (let i = 0; i < systems.length; i++) systems[i]._runCore();
+    em.commitRemovals();
   }
 
   pipeline.dispose = function () {

@@ -43,6 +43,7 @@ export interface EntityManager {
   onAdd(type: ComponentDef, callback: (entityId: EntityId) => void): () => void;
   onRemove(type: ComponentDef, callback: (entityId: EntityId) => void): () => void;
   flushHooks(): void;
+  commitRemovals(): void;
   enableTracking(filterComponent: ComponentDef): void;
   flushChanges(): { created: Set<EntityId>; destroyed: Set<EntityId> };
   flushSnapshots(): void;
@@ -292,6 +293,8 @@ export function createEntityManager(): EntityManager {
 
   let hooks: Hooks | null = null;
 
+  const removedData = new Map<EntityId, Map<symbol, Record<string, number | string | number[]>>>();
+
   const componentBitIndex = new Map<symbol, number>();
   let nextBitIndex = 0;
 
@@ -444,6 +447,20 @@ export function createEntityManager(): EntityManager {
             const pending = hooks.pendingRemove.get(type);
             if (pending) pending.push(id);
           }
+          // Snapshot component data so @OnRemoved hooks can still read it
+          if (hooks.removeCbs.size > 0) {
+            const idx = arch.entityToIndex.get(id)!;
+            let entitySnap: Map<symbol, Record<string, number | string | number[]>> | undefined;
+            for (const type of arch.types) {
+              if (hooks.removeCbs.has(type)) {
+                const store = arch.components.get(type);
+                if (store) {
+                  if (!entitySnap) { entitySnap = new Map(); removedData.set(id, entitySnap); }
+                  entitySnap.set(type, soaRead(store, idx));
+                }
+              }
+            }
+          }
         }
         if (destroyedSet && trackFilter && maskOverlaps(arch.key, trackFilter)) destroyedSet.add(id);
         removeFromArchetype(arch, id);
@@ -499,6 +516,15 @@ export function createEntityManager(): EntityManager {
       if (hooks) {
         const pending = hooks.pendingRemove.get(type);
         if (pending) pending.push(entityId);
+        // Snapshot removed component data so @OnRemoved hooks can still read it
+        if (hooks.removeCbs.has(type)) {
+          const store = arch.components.get(type);
+          if (store) {
+            const idx = arch.entityToIndex.get(entityId)!;
+            if (!removedData.has(entityId)) removedData.set(entityId, new Map());
+            removedData.get(entityId)!.set(type, soaRead(store, idx));
+          }
+        }
       }
 
       if (destroyedSet && trackFilter && maskOverlaps(arch.key, trackFilter)) destroyedSet.add(entityId);
@@ -527,24 +553,37 @@ export function createEntityManager(): EntityManager {
     getComponent(entityId: EntityId, comp: ComponentDef): Record<string, number | string | number[]> | undefined {
       const type = toSym(comp);
       const arch = entityArchetype.get(entityId);
-      if (!arch) return undefined;
-      const idx = arch.entityToIndex.get(entityId);
-      if (idx === undefined) return undefined;
-      return readComponentData(arch, type, idx);
+      if (arch) {
+        const idx = arch.entityToIndex.get(entityId);
+        if (idx !== undefined) return readComponentData(arch, type, idx);
+      }
+      // Fallback: check recently-removed data (accessible during @OnRemoved hooks)
+      const removed = removedData.get(entityId);
+      if (removed) return removed.get(type);
+      return undefined;
     },
 
     get(entityId: EntityId, fieldRef: FieldRef): number | string | undefined {
       const arch = entityArchetype.get(entityId);
-      if (!arch) return undefined;
-      const store = arch.components.get(fieldRef._sym);
-      if (!store) return undefined;
-      const idx = arch.entityToIndex.get(entityId)!;
-      const size = store._arraySizes[fieldRef._field] || 0;
-      if (size > 0) {
-        const base = idx * size;
-        return (store._fields[fieldRef._field] as Float32Array).subarray(base, base + size) as unknown as number;
+      if (arch) {
+        const store = arch.components.get(fieldRef._sym);
+        if (store) {
+          const idx = arch.entityToIndex.get(entityId)!;
+          const size = store._arraySizes[fieldRef._field] || 0;
+          if (size > 0) {
+            const base = idx * size;
+            return (store._fields[fieldRef._field] as Float32Array).subarray(base, base + size) as unknown as number;
+          }
+          return (store._fields[fieldRef._field] as never[])[idx];
+        }
       }
-      return (store._fields[fieldRef._field] as never[])[idx];
+      // Fallback: check recently-removed data (accessible during @OnRemoved hooks)
+      const removed = removedData.get(entityId);
+      if (removed) {
+        const compData = removed.get(fieldRef._sym);
+        if (compData) return compData[fieldRef._field] as number | string;
+      }
+      return undefined;
     },
 
     set(entityId: EntityId, fieldRef: FieldRef, value: number | string | ArrayLike<number>): void {
@@ -781,6 +820,10 @@ export function createEntityManager(): EntityManager {
         }
         pending.length = 0;
       }
+    },
+
+    commitRemovals(): void {
+      removedData.clear();
     },
 
     serialize(
