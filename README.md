@@ -13,7 +13,7 @@
 
 ---
 
-An Entity Component System for games and simulations in JavaScript. Entities with the same components are grouped into archetypes, and their fields are stored in TypedArrays — so iterating a million entities is a tight loop over contiguous memory, not a scatter of object lookups.
+An Entity Component System for games and simulations in TypeScript. Entities with the same components are grouped into archetypes, and their fields are stored in TypedArrays — so iterating a million entities is a tight loop over contiguous memory, not a scatter of object lookups.
 
 ```
 npm i archetype-ecs
@@ -55,6 +55,7 @@ em.forEach([Position, Velocity], (arch) => {
 <tr><td><strong>Low memory</strong></td><td>86 MB for 1M entities. Sparse-array ECS libraries use up to 2.4x more.</td></tr>
 <tr><td><strong>No allocations</strong></td><td><code>get</code>, <code>set</code>, and <code>forEach</code> don't allocate.</td></tr>
 <tr><td><strong>Typed</strong></td><td>TypeScript generics throughout. Field names autocomplete, wrong fields don't compile.</td></tr>
+<tr><td><strong>Systems</strong></td><td>Class-based systems with <code>@OnAdded</code> / <code>@OnRemoved</code> decorators. Functional API also available.</td></tr>
 </table>
 
 ---
@@ -83,7 +84,7 @@ const Enemy    = component('Enemy')
 
 ### Entities
 
-```js
+```ts
 const em = createEntityManager()
 
 // One at a time
@@ -109,7 +110,7 @@ em.destroyEntity(player)
 
 ### Read & write
 
-```js
+```ts
 // Access a single field (doesn't allocate)
 em.get(player, Position.x)         // 0
 em.get(player, Name.name)          // 'Hero'
@@ -120,7 +121,7 @@ em.getComponent(player, Position)  // { x: 0, y: 0 }
 em.getComponent(player, Name)      // { name: 'Hero', title: 'Sir' }
 ```
 
-### Systems — `forEach` vs `query`
+### Queries — `forEach` vs `query`
 
 Two ways to work with entities in bulk. Pick the right one for the job:
 
@@ -128,7 +129,7 @@ Two ways to work with entities in bulk. Pick the right one for the job:
 
 Iterates over matching archetypes. You get the backing TypedArrays directly.
 
-```js
+```ts
 function movementSystem(dt) {
   em.forEach([Position, Velocity], (arch) => {
     const px = arch.field(Position.x)  // Float32Array
@@ -147,7 +148,7 @@ function movementSystem(dt) {
 
 Returns entity IDs for when you need to target specific entities.
 
-```js
+```ts
 // Find the closest enemy to the player
 const enemies = em.query([Position, Enemy])
 let closest = -1, minDist = Infinity
@@ -177,9 +178,67 @@ const total = em.count([Position])
 | **Allocates** | Nothing | `number[]` of entity IDs |
 | **Access** | TypedArrays by field | `get` / `set` by entity ID |
 
+### Systems
+
+Class-based systems with decorators for component lifecycle hooks:
+
+```ts
+import { System, OnAdded, OnRemoved, createSystems } from 'archetype-ecs'
+
+class MovementSystem extends System {
+  tick() {
+    this.forEach([Position, Velocity], (arch) => {
+      const px = arch.field(Position.x)
+      const py = arch.field(Position.y)
+      const vx = arch.field(Velocity.vx)
+      const vy = arch.field(Velocity.vy)
+      for (let i = 0; i < arch.count; i++) {
+        px[i] += vx[i]
+        py[i] += vy[i]
+      }
+    })
+  }
+}
+
+class DeathSystem extends System {
+  @OnAdded(Health)
+  onSpawn(id) {
+    console.log(`Entity ${id} spawned with ${this.em.get(id, Health.hp)} HP`)
+  }
+
+  @OnRemoved(Health)
+  onDeath(id) {
+    this.em.addComponent(id, Dead)
+  }
+}
+
+const em = createEntityManager()
+const pipeline = createSystems(em, [MovementSystem, DeathSystem])
+
+// Game loop
+em.flushHooks()
+pipeline()
+```
+
+`@OnAdded(Health, Position)` fires when an entity has **all** specified components. `@OnRemoved(Health)` fires when any specified component is removed. Hooks are buffered and deduplicated — they fire during `pipeline()` (or `sys.run()`), after `flushHooks()` collects the pending changes.
+
+A functional API is also available:
+
+```ts
+import { createSystem } from 'archetype-ecs'
+
+const deathSystem = createSystem(em, (sys) => {
+  sys.onAdded(Health, (id) => console.log(`${id} spawned`))
+  sys.onRemoved(Health, (id) => console.log(`${id} died`))
+})
+
+em.flushHooks()
+deathSystem()
+```
+
 ### Serialize
 
-```js
+```ts
 const symbolToName = new Map([
   [Position._sym, 'Position'],
   [Velocity._sym, 'Velocity'],
@@ -242,7 +301,7 @@ Tag component — no data, used as a marker for queries.
 
 Schema component with uniform field type.
 
-```js
+```ts
 const Position = component('Position', 'f32', ['x', 'y'])
 const Name     = component('Name', 'string', ['name', 'title'])
 ```
@@ -251,7 +310,7 @@ const Name     = component('Name', 'string', ['name', 'title'])
 
 Schema component with mixed field types.
 
-```js
+```ts
 const Item = component('Item', { name: 'string', weight: 'f32', armor: 'u8' })
 ```
 
@@ -273,8 +332,32 @@ Returns an entity manager with the following methods:
 | `query(include, exclude?)` | Get matching entity IDs |
 | `count(include, exclude?)` | Count matching entities |
 | `forEach(include, callback, exclude?)` | Iterate archetypes with TypedArray access |
+| `onAdd(Comp, callback)` | Register callback for component additions *(deferred)* |
+| `onRemove(Comp, callback)` | Register callback for component removals *(deferred)* |
+| `flushHooks()` | Collect pending add/remove events for registered hooks |
 | `serialize(symbolToName, strip?, skip?, opts?)` | Serialize world to JSON-friendly object |
 | `deserialize(data, nameToSymbol, opts?)` | Restore world from serialized data |
+
+### `System`
+
+Base class for decorator-based systems.
+
+| | Description |
+|---|---|
+| `@OnAdded(...Comps)` | Decorator — method fires when entity gains **all** specified components |
+| `@OnRemoved(...Comps)` | Decorator — method fires when **any** specified component is removed |
+| `tick()` | Override — called every `run()` after hook callbacks |
+| `forEach(types, callback, exclude?)` | Shorthand for `this.em.forEach(...)` |
+| `run()` | Fire buffered hook callbacks, then `tick()` |
+| `dispose()` | Unsubscribe all hooks |
+
+### `createSystem(em, constructor)`
+
+Functional alternative to class-based systems. The constructor receives a context with `onAdded`, `onRemoved`, and `forEach`, and optionally returns a tick function.
+
+### `createSystems(em, entries)`
+
+Creates a pipeline from an array of class-based (`System` subclasses) and/or functional system constructors. Returns a callable that runs all systems in order, with a `dispose()` method.
 
 ---
 
@@ -290,7 +373,7 @@ Returns an entity manager with the following methods:
 
 Each library runs the same test — iterate 1M entities over 500 frames:
 
-```js
+```ts
 // archetype-ecs
 em.forEach([Position, Velocity], (arch) => {
   const px = arch.field(Position.x)   // Float32Array, dense
@@ -326,6 +409,7 @@ Compared against other JS ECS libraries:
 | Mixed string + numeric components | ✓ | — | — | — | — |
 | `forEach` with dense TypedArray field access | ✓ | — | — | — | — |
 | Field descriptors for both per-entity and bulk access | ✓ | — | — | — | — |
+| TC39 decorator system (`@OnAdded` / `@OnRemoved`) | ✓ | — | — | — | — |
 | Built-in profiler | ✓ | — | — | — | — |
 
 ### Full comparison
@@ -338,12 +422,14 @@ Compared against other JS ECS libraries:
 | TypeScript type inference | ✓ | — | ✓ | ✓ | ✓✓ |
 | Batch entity creation | ✓ | — | — | ✓ | ✓ |
 | Zero-alloc per-entity access | ✓ | ✓ | ✓ | ✓ | — |
+| System framework (class + functional) | ✓ | — | — | — | — |
+| Component lifecycle hooks | ✓ | — | — | — | ✓ |
 | Relations / hierarchies | — | ✓ | — | — | — |
 | React integration | — | — | — | — | ✓ |
 
 ✓✓ = notably stronger implementation in that library.
 
-archetype-ecs is the only one that combines fast iteration, string storage, serialization, and type safety.
+archetype-ecs is the only one that combines fast iteration, string storage, serialization, decorator-based systems, and type safety.
 
 ---
 
