@@ -1,11 +1,11 @@
-import { TYPED, componentSchemas, toSym, type ComponentDef, type TypeSpec } from './ComponentRegistry.js';
+import { TYPED, componentSchemas, toSym, type ComponentDef, type TypeSpec, type FieldRef } from './ComponentRegistry.js';
+
+export type { FieldRef } from './ComponentRegistry.js';
 
 export type EntityId = number;
 
-export interface FieldRef {
-  readonly _sym: symbol;
-  readonly _field: string;
-}
+export type SoAArrayValue = Float32Array | Float64Array | Int8Array | Int16Array | Int32Array
+  | Uint8Array | Uint16Array | Uint32Array | unknown[];
 
 export interface ArchetypeView {
   readonly id: number;
@@ -13,9 +13,9 @@ export interface ArchetypeView {
   readonly count: number;
   readonly snapshotEntityIds: EntityId[] | null;
   readonly snapshotCount: number;
-  field(ref: FieldRef): any;
+  field(ref: FieldRef): SoAArrayValue | undefined;
   fieldStride(ref: FieldRef): number;
-  snapshot(ref: FieldRef): any;
+  snapshot(ref: FieldRef): SoAArrayValue | undefined;
 }
 
 export interface SerializedData {
@@ -24,14 +24,16 @@ export interface SerializedData {
   components: Record<string, Record<string, unknown>>;
 }
 
+export type ComponentData = Record<string, number | string | ArrayLike<number>> | null | undefined;
+
 export interface EntityManager {
   createEntity(): EntityId;
   destroyEntity(id: EntityId): void;
-  addComponent(entityId: EntityId, type: ComponentDef, data?: any): void;
+  addComponent(entityId: EntityId, type: ComponentDef, data?: ComponentData): void;
   removeComponent(entityId: EntityId, type: ComponentDef): void;
-  getComponent(entityId: EntityId, type: ComponentDef): any;
-  get(entityId: EntityId, fieldRef: FieldRef): any;
-  set(entityId: EntityId, fieldRef: FieldRef, value: any): void;
+  getComponent(entityId: EntityId, type: ComponentDef): Record<string, number | string | number[]> | undefined;
+  get(entityId: EntityId, fieldRef: FieldRef): number | string | undefined;
+  set(entityId: EntityId, fieldRef: FieldRef, value: number | string | ArrayLike<number>): void;
   hasComponent(entityId: EntityId, type: ComponentDef): boolean;
   query(include: ComponentDef[], exclude?: ComponentDef[]): EntityId[];
   getAllEntities(): EntityId[];
@@ -64,10 +66,10 @@ interface SoAStore {
   _schema: Record<string, TypeSpec>;
   _capacity: number;
   _arraySizes: Record<string, number>;
-  [field: string]: any;
+  _fields: Record<string, SoAArrayValue>;
 }
 
-type SnapshotStore = Record<string, any>;
+type SnapshotStore = Record<string, SoAArrayValue>;
 
 interface Archetype {
   key: Uint32Array;
@@ -151,78 +153,83 @@ function maskKey(mask: Uint32Array): string {
 
 // ── SoA helpers ──────────────────────────────────────────
 
-function unpackSpec(spec: TypeSpec): [any, number] {
+function unpackSpec(spec: TypeSpec): [{ new(len: number): SoAArrayValue }, number] {
   if (Array.isArray(spec)) return spec;
   return [spec, 0];
 }
 
 function createSoAStore(schema: Record<string, TypeSpec>, capacity: number): SoAStore {
-  const store: any = { [TYPED]: true, _schema: schema, _capacity: capacity, _arraySizes: {} };
+  const fields: Record<string, SoAArrayValue> = {};
+  const arraySizes: Record<string, number> = {};
   for (const [field, spec] of Object.entries(schema)) {
     const [Ctor, size] = unpackSpec(spec);
     if (size > 0) {
-      store[field] = new Ctor(capacity * size);
-      store._arraySizes[field] = size;
+      fields[field] = new Ctor(capacity * size);
+      arraySizes[field] = size;
     } else {
-      store[field] = new Ctor(capacity);
+      fields[field] = new Ctor(capacity);
     }
   }
-  return store;
+  return { [TYPED]: true, _schema: schema, _capacity: capacity, _arraySizes: arraySizes, _fields: fields };
 }
 
 function growSoAStore(store: SoAStore, newCapacity: number): void {
   store._capacity = newCapacity;
   for (const [field, spec] of Object.entries(store._schema)) {
     const [Ctor, size] = unpackSpec(spec);
-    const old = store[field];
+    const old = store._fields[field];
     const allocSize = size > 0 ? newCapacity * size : newCapacity;
-    store[field] = new Ctor(allocSize);
+    const grown = new Ctor(allocSize);
     if (Ctor === Array) {
-      for (let i = 0; i < old.length; i++) store[field][i] = old[i];
+      for (let i = 0; i < old.length; i++) (grown as unknown[])[i] = (old as unknown[])[i];
     } else {
-      store[field].set(old);
+      (grown as Exclude<SoAArrayValue, unknown[]>).set(old as Exclude<SoAArrayValue, unknown[]>);
     }
+    store._fields[field] = grown;
   }
 }
 
-function soaWrite(store: SoAStore, idx: number, data: any): void {
+function soaWrite(store: SoAStore, idx: number, data: ComponentData): void {
   if (!data) {
     for (const field in store._schema) {
+      const arr = store._fields[field];
       const size = store._arraySizes[field] || 0;
       if (size > 0) {
         const base = idx * size;
-        for (let j = 0; j < size; j++) store[field][base + j] = 0;
+        for (let j = 0; j < size; j++) (arr as never[])[base + j] = 0 as never;
       } else {
-        store[field][idx] = 0;
+        (arr as never[])[idx] = 0 as never;
       }
     }
     return;
   }
   for (const field in store._schema) {
+    const arr = store._fields[field];
     const size = store._arraySizes[field] || 0;
     if (size > 0) {
       const base = idx * size;
       const src = data[field];
       if (src) {
         for (let j = 0; j < size; j++) {
-          store[field][base + j] = src[j] ?? 0;
+          (arr as never[])[base + j] = ((src as ArrayLike<number>)[j] ?? 0) as never;
         }
       }
     } else {
-      store[field][idx] = data[field];
+      (arr as never[])[idx] = data[field] as never;
     }
   }
 }
 
-function soaRead(store: SoAStore, idx: number): Record<string, any> {
-  const obj: Record<string, any> = {};
+function soaRead(store: SoAStore, idx: number): Record<string, number | string | number[]> {
+  const obj: Record<string, number | string | number[]> = {};
   for (const field in store._schema) {
+    const arr = store._fields[field];
     const size = store._arraySizes[field] || 0;
     if (size > 0) {
       const base = idx * size;
-      obj[field] = Array.from(store[field].subarray(base, base + size));
+      obj[field] = Array.from((arr as Float32Array).subarray(base, base + size));
     } else {
-      obj[field] = store[field][idx];
+      obj[field] = (arr as never[])[idx];
     }
   }
   return obj;
@@ -230,7 +237,7 @@ function soaRead(store: SoAStore, idx: number): Record<string, any> {
 
 function soaSwap(store: SoAStore, idxA: number, idxB: number): void {
   for (const field in store._schema) {
-    const arr = store[field];
+    const arr = store._fields[field] as never[];
     const size = store._arraySizes[field] || 0;
     if (size > 0) {
       const baseA = idxA * size;
@@ -261,12 +268,13 @@ function growSnapshotStore(snap: SnapshotStore, schema: Record<string, TypeSpec>
   for (const [field, spec] of Object.entries(schema)) {
     const [Ctor, size] = unpackSpec(spec);
     const old = snap[field];
-    snap[field] = new Ctor(size > 0 ? newCapacity * size : newCapacity);
+    const grown = new Ctor(size > 0 ? newCapacity * size : newCapacity);
     if (Ctor === Array) {
-      for (let i = 0; i < old.length; i++) snap[field][i] = old[i];
+      for (let i = 0; i < old.length; i++) (grown as unknown[])[i] = (old as unknown[])[i];
     } else {
-      snap[field].set(old);
+      (grown as Exclude<SoAArrayValue, unknown[]>).set(old as Exclude<SoAArrayValue, unknown[]>);
     }
+    snap[field] = grown;
   }
 }
 
@@ -361,13 +369,13 @@ export function createEntityManager(): EntityManager {
     }
   }
 
-  function addToArchetype(arch: Archetype, entityId: EntityId, componentMap: Record<symbol, any>): void {
+  function addToArchetype(arch: Archetype, entityId: EntityId, componentMap: Map<symbol, ComponentData>): void {
     ensureCapacity(arch);
     const idx = arch.count;
     arch.entityIds[idx] = entityId;
     for (const t of arch.types) {
       const store = arch.components.get(t);
-      if (store) soaWrite(store, idx, (componentMap as any)[t]);
+      if (store) soaWrite(store, idx, componentMap.get(t));
     }
     arch.entityToIndex.set(entityId, idx);
     arch.count++;
@@ -393,7 +401,7 @@ export function createEntityManager(): EntityManager {
     entityArchetype.delete(entityId);
   }
 
-  function readComponentData(arch: Archetype, type: symbol, idx: number): any {
+  function readComponentData(arch: Archetype, type: symbol, idx: number): Record<string, number | string | number[]> | undefined {
     const store = arch.components.get(type);
     if (!store) return undefined;
     return soaRead(store, idx);
@@ -443,13 +451,13 @@ export function createEntityManager(): EntityManager {
       allEntityIds.delete(id);
     },
 
-    addComponent(entityId: EntityId, comp: ComponentDef, data?: any): void {
+    addComponent(entityId: EntityId, comp: ComponentDef, data?: ComponentData): void {
       const type = toSym(comp);
       const arch = entityArchetype.get(entityId);
 
       if (!arch) {
         const newArch = getOrCreateArchetype([type]);
-        addToArchetype(newArch, entityId, { [type as unknown as string]: data });
+        addToArchetype(newArch, entityId, new Map([[type, data]]));
         if (hooks) {
           const pending = hooks.pendingAdd.get(type);
           if (pending) pending.push(entityId);
@@ -470,9 +478,9 @@ export function createEntityManager(): EntityManager {
       const newArch = getOrCreateArchetype(newTypes);
 
       const idx = arch.entityToIndex.get(entityId)!;
-      const map: any = { [type as unknown as string]: data };
+      const map = new Map<symbol, ComponentData>([[type, data]]);
       for (const t of arch.types) {
-        map[t as unknown as string] = readComponentData(arch, t, idx);
+        map.set(t, readComponentData(arch, t, idx));
       }
 
       removeFromArchetype(arch, entityId);
@@ -507,16 +515,16 @@ export function createEntityManager(): EntityManager {
       const newArch = getOrCreateArchetype(newTypes);
 
       const idx = arch.entityToIndex.get(entityId)!;
-      const map: any = {};
+      const map = new Map<symbol, ComponentData>();
       for (const t of newTypes) {
-        map[t as unknown as string] = readComponentData(arch, t, idx);
+        map.set(t, readComponentData(arch, t, idx));
       }
 
       removeFromArchetype(arch, entityId);
       addToArchetype(newArch, entityId, map);
     },
 
-    getComponent(entityId: EntityId, comp: ComponentDef): any {
+    getComponent(entityId: EntityId, comp: ComponentDef): Record<string, number | string | number[]> | undefined {
       const type = toSym(comp);
       const arch = entityArchetype.get(entityId);
       if (!arch) return undefined;
@@ -525,7 +533,7 @@ export function createEntityManager(): EntityManager {
       return readComponentData(arch, type, idx);
     },
 
-    get(entityId: EntityId, fieldRef: FieldRef): any {
+    get(entityId: EntityId, fieldRef: FieldRef): number | string | undefined {
       const arch = entityArchetype.get(entityId);
       if (!arch) return undefined;
       const store = arch.components.get(fieldRef._sym);
@@ -534,12 +542,12 @@ export function createEntityManager(): EntityManager {
       const size = store._arraySizes[fieldRef._field] || 0;
       if (size > 0) {
         const base = idx * size;
-        return store[fieldRef._field].subarray(base, base + size);
+        return (store._fields[fieldRef._field] as Float32Array).subarray(base, base + size) as unknown as number;
       }
-      return store[fieldRef._field][idx];
+      return (store._fields[fieldRef._field] as never[])[idx];
     },
 
-    set(entityId: EntityId, fieldRef: FieldRef, value: any): void {
+    set(entityId: EntityId, fieldRef: FieldRef, value: number | string | ArrayLike<number>): void {
       const arch = entityArchetype.get(entityId);
       if (!arch) return;
       const store = arch.components.get(fieldRef._sym);
@@ -547,9 +555,9 @@ export function createEntityManager(): EntityManager {
       const idx = arch.entityToIndex.get(entityId)!;
       const size = store._arraySizes[fieldRef._field] || 0;
       if (size > 0) {
-        store[fieldRef._field].set(value, idx * size);
+        (store._fields[fieldRef._field] as Float32Array).set(value as ArrayLike<number>, idx * size);
       } else {
-        store[fieldRef._field][idx] = value;
+        (store._fields[fieldRef._field] as never[])[idx] = value as never;
       }
     },
 
@@ -581,11 +589,11 @@ export function createEntityManager(): EntityManager {
       allEntityIds.add(id);
 
       const types: symbol[] = [];
-      const map: any = {};
+      const map = new Map<symbol, ComponentData>();
       for (let i = 0; i < args.length; i += 2) {
         const sym = toSym(args[i] as ComponentDef);
         types.push(sym);
-        map[sym as unknown as string] = args[i + 1];
+        map.set(sym, args[i + 1] as ComponentData);
       }
       const arch = getOrCreateArchetype(types);
       addToArchetype(arch, id, map);
@@ -623,21 +631,18 @@ export function createEntityManager(): EntityManager {
           snapshotEntityIds: arch.snapshotEntityIds,
           snapshotCount: arch.snapshotCount,
           field(ref: FieldRef) {
-            const sym = ref._sym || ref;
-            const store = arch.components.get(sym as symbol);
+            const store = arch.components.get(ref._sym);
             if (!store) return undefined;
-            return store[ref._field];
+            return store._fields[ref._field];
           },
           fieldStride(ref: FieldRef) {
-            const sym = ref._sym || ref;
-            const store = arch.components.get(sym as symbol);
+            const store = arch.components.get(ref._sym);
             if (!store) return 1;
             return store._arraySizes[ref._field] || 1;
           },
           snapshot(ref: FieldRef) {
             if (!snaps) return undefined;
-            const sym = ref._sym || ref;
-            const snap = snaps.get(sym as symbol);
+            const snap = snaps.get(ref._sym);
             if (!snap) return undefined;
             return snap[ref._field];
           }
@@ -688,14 +693,14 @@ export function createEntityManager(): EntityManager {
           const snap = arch.snapshots!.get(type);
           if (!snap) continue;
           for (const field in store._schema) {
-            const src = store[field];
+            const src = store._fields[field];
             const dst = snap[field];
             const size = store._arraySizes[field] || 0;
             const len = size > 0 ? count * size : count;
-            if (src.set) {
-              dst.set(src.subarray(0, len));
+            if ('set' in src) {
+              (dst as Exclude<SoAArrayValue, unknown[]>).set((src as Float32Array).subarray(0, len));
             } else {
-              for (let i = 0; i < len; i++) dst[i] = src[i];
+              for (let i = 0; i < len; i++) (dst as unknown[])[i] = (src as unknown[])[i];
             }
           }
         }
@@ -857,11 +862,11 @@ export function createEntityManager(): EntityManager {
 
       nextId = data.nextId;
 
-      const entityComponents = new Map<EntityId, any>();
+      const entityComponents = new Map<EntityId, Map<symbol, ComponentData>>();
 
       for (const id of data.entities) {
         allEntityIds.add(id);
-        entityComponents.set(id, {});
+        entityComponents.set(id, new Map());
       }
 
       for (const [name, store] of Object.entries(data.components)) {
@@ -877,16 +882,16 @@ export function createEntityManager(): EntityManager {
           if (!obj) continue;
 
           if (customDeserializer) {
-            obj[sym] = customDeserializer(compData);
+            obj.set(sym, customDeserializer(compData) as ComponentData);
           } else {
-            obj[sym] = compData;
+            obj.set(sym, compData as ComponentData);
           }
         }
       }
 
-      const groupedByKey = new Map<string, { entityId: EntityId; compMap: any }[]>();
+      const groupedByKey = new Map<string, { entityId: EntityId; compMap: Map<symbol, ComponentData> }[]>();
       for (const [entityId, compMap] of entityComponents) {
-        const types = Object.getOwnPropertySymbols(compMap);
+        const types = [...compMap.keys()];
         if (types.length === 0) continue;
 
         const key = maskKey(computeMask(types));
@@ -897,7 +902,7 @@ export function createEntityManager(): EntityManager {
       }
 
       for (const [, entries] of groupedByKey) {
-        const types = Object.getOwnPropertySymbols(entries[0].compMap);
+        const types = [...entries[0].compMap.keys()];
         const arch = getOrCreateArchetype(types);
 
         for (const { entityId, compMap } of entries) {

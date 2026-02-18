@@ -3,11 +3,15 @@ import type { EntityId, EntityManager, ArchetypeView } from './EntityManager.js'
 
 // ── Decorators (TC39 Stage 3) ────────────────────────────
 
+function getMethod(obj: object, name: string | symbol): Function {
+  return (obj as Record<string | symbol, Function>)[name];
+}
+
 export function OnAdded(...types: ComponentDef[]) {
   return function (_method: Function, context: ClassMethodDecoratorContext) {
     context.addInitializer(function () {
       const self = this as unknown as System;
-      self._registerHook('add', types, (self as any)[context.name].bind(self));
+      self._registerHook('add', types, getMethod(self, context.name).bind(self));
     });
   };
 }
@@ -16,7 +20,7 @@ export function OnRemoved(...types: ComponentDef[]) {
   return function (_method: Function, context: ClassMethodDecoratorContext) {
     context.addInitializer(function () {
       const self = this as unknown as System;
-      self._registerHook('remove', types, (self as any)[context.name].bind(self));
+      self._registerHook('remove', types, getMethod(self, context.name).bind(self));
     });
   };
 }
@@ -108,7 +112,7 @@ export function createSystem(em: EntityManager, constructor: FunctionalSystemCon
   const hooks: FunctionalHook[] = [];
 
   const sys: SystemContext = {
-    onAdded(...args: any[]) {
+    onAdded(...args: [...ComponentDef[], HookCallback]) {
       const callback = args[args.length - 1] as HookCallback;
       const types = args.slice(0, -1) as ComponentDef[];
       const buffer = new Set<EntityId>();
@@ -127,7 +131,7 @@ export function createSystem(em: EntityManager, constructor: FunctionalSystemCon
       hooks.push({ unsubs, buffer, callback });
     },
 
-    onRemoved(...args: any[]) {
+    onRemoved(...args: [...ComponentDef[], HookCallback]) {
       const callback = args[args.length - 1] as HookCallback;
       const types = args.slice(0, -1) as ComponentDef[];
       const buffer = new Set<EntityId>();
@@ -180,10 +184,19 @@ export interface Pipeline {
   dispose(): void;
 }
 
+function isSystemClass(entry: Function): entry is new (em: EntityManager) => System {
+  let proto = entry.prototype;
+  while (proto) {
+    proto = Object.getPrototypeOf(proto);
+    if (proto === System.prototype) return true;
+  }
+  return false;
+}
+
 export function createSystems(em: EntityManager, entries: (FunctionalSystemConstructor | (new (em: EntityManager) => System))[]): Pipeline {
   const systems: Runnable[] = entries.map(Entry => {
-    if ((Entry as any).prototype instanceof System) {
-      return new (Entry as new (em: EntityManager) => System)(em);
+    if (isSystemClass(Entry)) {
+      return new Entry(em);
     }
     const sys = createSystem(em, Entry as FunctionalSystemConstructor);
     return { run: sys, dispose: sys.dispose };

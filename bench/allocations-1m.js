@@ -4,7 +4,7 @@
 import {
   createWorld, addEntity, addComponent, removeEntity, query
 } from 'bitecs';
-import { createEntityManager, component } from '../dist/src/index.js';
+import { createEntityManager, component } from '../dist/index.js';
 
 const COUNT = 1_000_000;
 const RUNS = 5;

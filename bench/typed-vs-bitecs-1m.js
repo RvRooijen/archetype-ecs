@@ -3,7 +3,7 @@
 import {
   createWorld, addEntity, addComponent, query
 } from 'bitecs';
-import { createEntityManager, component } from '../dist/src/index.js';
+import { createEntityManager, component } from '../dist/index.js';
 
 const COUNT = 1_000_000;
 const FRAMES = 500;

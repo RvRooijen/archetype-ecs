@@ -1,6 +1,6 @@
 // Benchmark: forEach+field (bulk TypedArray) vs query+get/set (per-entity) vs query+getComponent (allocating)
 
-import { createEntityManager, component } from '../dist/src/index.js';
+import { createEntityManager, component } from '../dist/index.js';
 
 const COUNT = 1_000_000;
 const FRAMES = 200;

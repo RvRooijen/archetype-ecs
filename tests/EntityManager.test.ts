@@ -1,7 +1,7 @@
 import { describe, it, beforeEach } from 'node:test';
 import assert from 'node:assert/strict';
 import { createEntityManager, type EntityManager } from '../src/EntityManager.js';
-import { component } from '../src/index.js';
+import { component, type ComponentDef } from '../src/index.js';
 
 describe('EntityManager', () => {
   let em: EntityManager;
@@ -140,7 +140,7 @@ describe('EntityManager', () => {
       [Velocity._sym, 'Velocity'],
       [Health._sym, 'Health']
     ]);
-    const nameToSymbol: Record<string, any> = { Position, Velocity, Health };
+    const nameToSymbol: Record<string, ComponentDef> = { Position, Velocity, Health };
 
     it('round-trips entities and components', () => {
       const a = em.createEntity();
@@ -195,27 +195,27 @@ describe('EntityManager', () => {
 
       const result = em.serialize(metaSymbolToName, [], [], { serializers });
       assert.deepEqual(result.components['Meta'][a], { x: 1, y: 2 });
-      assert.equal((result.components['Meta'][a] as any).secret, undefined);
+      assert.equal((result.components['Meta'][a] as Record<string, unknown>).secret, undefined);
     });
 
     it('custom deserializers are used when provided', () => {
       const Meta = component('Meta2', { x: 'f32', y: 'f32' });
       const metaSymbolToName = new Map([...symbolToName, [Meta._sym, 'Meta2']]);
-      const metaNameToSymbol: Record<string, any> = { ...nameToSymbol, Meta2: Meta };
+      const metaNameToSymbol: Record<string, ComponentDef> = { ...nameToSymbol, Meta2: Meta };
 
       const a = em.createEntity();
       em.addComponent(a, Meta, { x: 1, y: 2 });
 
       const data = em.serialize(metaSymbolToName);
 
-      const deserializers = new Map<string, (data: any) => any>([
-        ['Meta2', (compData: any) => ({ ...compData, restored: true })]
+      const deserializers = new Map<string, (data: unknown) => unknown>([
+        ['Meta2', (compData) => ({ ...(compData as Record<string, unknown>), restored: true })]
       ]);
 
       em.deserialize(data, metaNameToSymbol, { deserializers });
-      const result = em.getComponent(a, Meta);
-      assert.ok(Math.abs(result.x - 1) < 0.01);
-      assert.ok(Math.abs(result.y - 2) < 0.01);
+      const result = em.getComponent(a, Meta)!;
+      assert.ok(Math.abs(result.x as number - 1) < 0.01);
+      assert.ok(Math.abs(result.y as number - 2) < 0.01);
     });
 
     it('deserialize clears previous state', () => {
@@ -239,9 +239,9 @@ describe('Typed Components (SoA)', () => {
     const Pos = component('Pos', 'f32', ['x', 'y']);
     const id = em.createEntity();
     em.addComponent(id, Pos, { x: 1.5, y: 2.5 });
-    const result = em.getComponent(id, Pos);
-    assert.ok(Math.abs(result.x - 1.5) < 0.001);
-    assert.ok(Math.abs(result.y - 2.5) < 0.001);
+    const result = em.getComponent(id, Pos)!;
+    assert.ok(Math.abs(result.x as number - 1.5) < 0.001);
+    assert.ok(Math.abs(result.y as number - 2.5) < 0.001);
   });
 
   it('growth past initial capacity (>64 entities)', () => {
@@ -253,9 +253,9 @@ describe('Typed Components (SoA)', () => {
       ids.push(id);
     }
     for (let i = 0; i < 100; i++) {
-      const result = em.getComponent(ids[i], Pos);
-      assert.ok(Math.abs(result.x - i) < 0.001);
-      assert.ok(Math.abs(result.y - i * 2) < 0.001);
+      const result = em.getComponent(ids[i], Pos)!;
+      assert.ok(Math.abs(result.x as number - i) < 0.001);
+      assert.ok(Math.abs(result.y as number - i * 2) < 0.001);
     }
   });
 
@@ -270,10 +270,10 @@ describe('Typed Components (SoA)', () => {
 
     em.destroyEntity(a);
 
-    const resultB = em.getComponent(b, Pos);
-    assert.ok(Math.abs(resultB.x - 3) < 0.001);
-    const resultC = em.getComponent(c, Pos);
-    assert.ok(Math.abs(resultC.x - 5) < 0.001);
+    const resultB = em.getComponent(b, Pos)!;
+    assert.ok(Math.abs(resultB.x as number - 3) < 0.001);
+    const resultC = em.getComponent(c, Pos)!;
+    assert.ok(Math.abs(resultC.x as number - 5) < 0.001);
   });
 
   it('typed + tag on same entity', () => {
@@ -283,8 +283,8 @@ describe('Typed Components (SoA)', () => {
     em.addComponent(id, Pos, { x: 10, y: 20 });
     em.addComponent(id, Tag, {});
 
-    const pos = em.getComponent(id, Pos);
-    assert.ok(Math.abs(pos.x - 10) < 0.001);
+    const pos = em.getComponent(id, Pos)!;
+    assert.ok(Math.abs(pos.x as number - 10) < 0.001);
     assert.equal(em.getComponent(id, Tag), undefined);
     assert.equal(em.hasComponent(id, Tag), true);
   });
@@ -300,10 +300,10 @@ describe('Typed Components (SoA)', () => {
     }
 
     em.forEach([Pos, Vel], (arch) => {
-      const px = arch.field(Pos.x as any);
-      const py = arch.field(Pos.y as any);
-      const vx = arch.field(Vel.vx as any);
-      const vy = arch.field(Vel.vy as any);
+      const px = arch.field(Pos.x) as Float32Array;
+      const py = arch.field(Pos.y) as Float32Array;
+      const vx = arch.field(Vel.vx) as Float32Array;
+      const vy = arch.field(Vel.vy) as Float32Array;
       for (let i = 0; i < arch.count; i++) {
         px[i] += vx[i];
         py[i] += vy[i];
@@ -312,16 +312,16 @@ describe('Typed Components (SoA)', () => {
 
     const ids = em.query([Pos, Vel]);
     for (const id of ids) {
-      const pos = em.getComponent(id, Pos);
-      assert.ok(pos.x >= 1);
-      assert.ok(Math.abs(pos.y - 2) < 0.001);
+      const pos = em.getComponent(id, Pos)!;
+      assert.ok((pos.x as number) >= 1);
+      assert.ok(Math.abs(pos.y as number - 2) < 0.001);
     }
   });
 
   it('serialize/deserialize round-trip with typed components', () => {
     const Pos = component('PosSer', 'f32', ['x', 'y']);
     const symbolToName = new Map([[Pos._sym, 'PosSer']]);
-    const nameToSymbol: Record<string, any> = { PosSer: Pos };
+    const nameToSymbol: Record<string, ComponentDef> = { PosSer: Pos };
 
     const a = em.createEntity();
     em.addComponent(a, Pos, { x: 1.5, y: 2.5 });
@@ -331,10 +331,10 @@ describe('Typed Components (SoA)', () => {
     const data = em.serialize(symbolToName);
     em.deserialize(data, nameToSymbol);
 
-    const posA = em.getComponent(a, Pos);
-    assert.ok(Math.abs(posA.x - 1.5) < 0.01);
-    const posB = em.getComponent(b, Pos);
-    assert.ok(Math.abs(posB.x - 3.5) < 0.01);
+    const posA = em.getComponent(a, Pos)!;
+    assert.ok(Math.abs(posA.x as number - 1.5) < 0.01);
+    const posB = em.getComponent(b, Pos)!;
+    assert.ok(Math.abs(posB.x as number - 3.5) < 0.01);
   });
 
   it('archetype migration with typed components', () => {
@@ -345,12 +345,12 @@ describe('Typed Components (SoA)', () => {
     em.addComponent(id, Pos, { x: 5, y: 10 });
     em.addComponent(id, Vel, { vx: 1, vy: 2 });
 
-    const pos = em.getComponent(id, Pos);
-    assert.ok(Math.abs(pos.x - 5) < 0.001);
+    const pos = em.getComponent(id, Pos)!;
+    assert.ok(Math.abs(pos.x as number - 5) < 0.001);
 
     em.removeComponent(id, Vel);
-    const pos2 = em.getComponent(id, Pos);
-    assert.ok(Math.abs(pos2.x - 5) < 0.001);
+    const pos2 = em.getComponent(id, Pos)!;
+    assert.ok(Math.abs(pos2.x as number - 5) < 0.001);
     assert.equal(em.hasComponent(id, Vel), false);
   });
 
@@ -359,24 +359,24 @@ describe('Typed Components (SoA)', () => {
     const id = em.createEntity();
     em.addComponent(id, Pos, { x: 1, y: 2 });
     em.addComponent(id, Pos, { x: 99, y: 88 });
-    const result = em.getComponent(id, Pos);
-    assert.ok(Math.abs(result.x - 99) < 0.001);
+    const result = em.getComponent(id, Pos)!;
+    assert.ok(Math.abs(result.x as number - 99) < 0.001);
   });
 
   it('get/set for zero-allocation field access', () => {
     const Pos = component('PosGS', 'f32', ['x', 'y']);
     const id = em.createEntity();
     em.addComponent(id, Pos, { x: 3.5, y: 7.5 });
-    assert.ok(Math.abs(em.get(id, Pos.x as any) - 3.5) < 0.001);
-    em.set(id, Pos.x as any, 42);
-    assert.ok(Math.abs(em.get(id, Pos.x as any) - 42) < 0.001);
+    assert.ok(Math.abs(em.get(id, Pos.x)! as number - 3.5) < 0.001);
+    em.set(id, Pos.x, 42);
+    assert.ok(Math.abs(em.get(id, Pos.x)! as number - 42) < 0.001);
   });
 
   it('get returns undefined for missing entity/component', () => {
     const Pos = component('PosGFM', 'f32', ['x', 'y']);
-    assert.equal(em.get(999, Pos.x as any), undefined);
+    assert.equal(em.get(999, Pos.x), undefined);
     const id = em.createEntity();
-    assert.equal(em.get(id, Pos.x as any), undefined);
+    assert.equal(em.get(id, Pos.x), undefined);
   });
 
   it('forEach field returns undefined for tag component', () => {
@@ -387,7 +387,7 @@ describe('Typed Components (SoA)', () => {
     em.addComponent(id, Tag, {});
 
     em.forEach([Pos, Tag], (arch) => {
-      assert.ok(arch.field(Pos.x as any) instanceof Float32Array);
+      assert.ok(arch.field(Pos.x) instanceof Float32Array);
     });
   });
 
@@ -396,11 +396,11 @@ describe('Typed Components (SoA)', () => {
     const id = em.createEntity();
     em.addComponent(id, Name, { name: 'Hero', title: 'Sir' });
 
-    assert.equal(em.get(id, Name.name as any), 'Hero');
-    assert.equal(em.get(id, Name.title as any), 'Sir');
+    assert.equal(em.get(id, Name.name), 'Hero');
+    assert.equal(em.get(id, Name.title), 'Sir');
 
-    em.set(id, Name.name as any, 'Villain');
-    assert.equal(em.get(id, Name.name as any), 'Villain');
+    em.set(id, Name.name, 'Villain');
+    assert.equal(em.get(id, Name.name), 'Villain');
 
     const obj = em.getComponent(id, Name);
     assert.deepEqual(obj, { name: 'Villain', title: 'Sir' });
@@ -411,8 +411,8 @@ describe('Typed Components (SoA)', () => {
     const id = em.createEntity();
     em.addComponent(id, Label, { text: 'hello', color: 'red' });
 
-    assert.equal(em.get(id, Label.text as any), 'hello');
-    assert.equal(em.get(id, Label.color as any), 'red');
+    assert.equal(em.get(id, Label.text), 'hello');
+    assert.equal(em.get(id, Label.color), 'red');
   });
 
   it('string component growth past capacity', () => {
@@ -423,8 +423,8 @@ describe('Typed Components (SoA)', () => {
     }
     const ids = em.query([Name]);
     assert.equal(ids.length, 100);
-    assert.equal(em.get(ids[0], Name.value as any), 'entity_0');
-    assert.equal(em.get(ids[99], Name.value as any), 'entity_99');
+    assert.equal(em.get(ids[0], Name.value), 'entity_0');
+    assert.equal(em.get(ids[99], Name.value), 'entity_99');
   });
 
   it('string component swap-remove preserves data', () => {
@@ -437,8 +437,8 @@ describe('Typed Components (SoA)', () => {
     em.addComponent(c, Name, { value: 'ccc' });
 
     em.destroyEntity(a);
-    assert.equal(em.get(b, Name.value as any), 'bbb');
-    assert.equal(em.get(c, Name.value as any), 'ccc');
+    assert.equal(em.get(b, Name.value), 'bbb');
+    assert.equal(em.get(c, Name.value), 'ccc');
   });
 
   it('mixed string + numeric fields in one component', () => {
@@ -446,8 +446,8 @@ describe('Typed Components (SoA)', () => {
     const id = em.createEntity();
     em.addComponent(id, Item, { name: 'Sword', weight: 3.5 });
 
-    assert.equal(em.get(id, Item.name as any), 'Sword');
-    assert.ok(Math.abs(em.get(id, Item.weight as any) - 3.5) < 0.01);
+    assert.equal(em.get(id, Item.name), 'Sword');
+    assert.ok(Math.abs(em.get(id, Item.weight)! as number - 3.5) < 0.01);
   });
 
   it('string component forEach field access', () => {
@@ -458,7 +458,7 @@ describe('Typed Components (SoA)', () => {
     }
 
     em.forEach([Name], (arch) => {
-      const values = arch.field(Name.value as any);
+      const values = arch.field(Name.value);
       assert.ok(Array.isArray(values));
       assert.equal(values[0], 'e0');
       assert.equal(values[4], 'e4');

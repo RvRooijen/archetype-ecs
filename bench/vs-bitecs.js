@@ -1,7 +1,7 @@
 // Benchmark: archetype-ecs vs bitECS
 // Tests: system loop, entity creation, component add/remove churn
 
-import { createEntityManager, component } from '../dist/src/index.js';
+import { createEntityManager, component } from '../dist/index.js';
 import {
   createWorld, addEntity,
   addComponent, removeComponent,
