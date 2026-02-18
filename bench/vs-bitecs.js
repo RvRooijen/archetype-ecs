@@ -1,7 +1,7 @@
-// Benchmark: archetype-ecs (current) vs archetype+TypedArrays (hypothetical) vs bitECS
+// Benchmark: archetype-ecs vs bitECS
 // Tests: system loop, entity creation, component add/remove churn
 
-import { createEntityManager } from '../src/EntityManager.js';
+import { createEntityManager, component } from '../dist/index.js';
 import {
   createWorld, addEntity,
   addComponent, removeComponent,
@@ -19,52 +19,29 @@ const pad = (s, n) => String(s).padStart(n);
 // =========================================================================
 
 function benchArchetypeLoop(entityCount) {
+  const Position = component('APos', 'f32', ['x', 'y']);
+  const Velocity = component('AVel', 'f32', ['vx', 'vy']);
   const em = createEntityManager();
-  const Position = Symbol('Position');
-  const Velocity = Symbol('Velocity');
 
   for (let i = 0; i < entityCount; i++) {
-    const id = em.createEntity();
-    em.addComponent(id, Position, { x: Math.random() * 100, y: Math.random() * 100 });
-    em.addComponent(id, Velocity, { vx: Math.random() * 10, vy: Math.random() * 10 });
+    em.createEntityWith(
+      Position, { x: Math.random() * 100, y: Math.random() * 100 },
+      Velocity, { vx: Math.random() * 10, vy: Math.random() * 10 },
+    );
   }
 
   const t0 = performance.now();
   for (let f = 0; f < FRAMES; f++) {
-    const entities = em.query([Position, Velocity]);
-    for (let i = 0; i < entities.length; i++) {
-      const pos = em.getComponent(entities[i], Position);
-      const vel = em.getComponent(entities[i], Velocity);
-      pos.x += vel.vx;
-      pos.y += vel.vy;
-    }
-  }
-  return (performance.now() - t0) / FRAMES;
-}
-
-// Simulates archetype-ecs with TypedArray backing:
-// Dense arrays per archetype, but Float32Arrays instead of object arrays
-function benchArchetypeTypedLoop(entityCount) {
-  // One archetype with all entities (they all have Position+Velocity)
-  const count = entityCount;
-  const px = new Float32Array(count);
-  const py = new Float32Array(count);
-  const vx = new Float32Array(count);
-  const vy = new Float32Array(count);
-  for (let i = 0; i < count; i++) {
-    px[i] = Math.random() * 100;
-    py[i] = Math.random() * 100;
-    vx[i] = Math.random() * 10;
-    vy[i] = Math.random() * 10;
-  }
-
-  const t0 = performance.now();
-  for (let f = 0; f < FRAMES; f++) {
-    // Dense iteration — no entity ID lookup, no getComponent, no sparse gaps
-    for (let i = 0; i < count; i++) {
-      px[i] += vx[i];
-      py[i] += vy[i];
-    }
+    em.forEach([Position, Velocity], (arch) => {
+      const px = arch.field(Position.x);
+      const py = arch.field(Position.y);
+      const vx = arch.field(Velocity.vx);
+      const vy = arch.field(Velocity.vy);
+      for (let i = 0; i < arch.count; i++) {
+        px[i] += vx[i];
+        py[i] += vy[i];
+      }
+    });
   }
   return (performance.now() - t0) / FRAMES;
 }
@@ -107,15 +84,16 @@ function benchBitECSLoop(entityCount) {
 // =========================================================================
 
 function benchArchetypeCreate(entityCount) {
+  const Position = component('CPos', 'f32', ['x', 'y']);
+  const Velocity = component('CVel', 'f32', ['vx', 'vy']);
   const em = createEntityManager();
-  const Position = Symbol('Position');
-  const Velocity = Symbol('Velocity');
 
   const t0 = performance.now();
   for (let i = 0; i < entityCount; i++) {
-    const id = em.createEntity();
-    em.addComponent(id, Position, { x: i, y: i });
-    em.addComponent(id, Velocity, { vx: 1, vy: 1 });
+    em.createEntityWith(
+      Position, { x: i, y: i },
+      Velocity, { vx: 1, vy: 1 },
+    );
   }
   return performance.now() - t0;
 }
@@ -149,9 +127,9 @@ function benchBitECSCreate(entityCount) {
 // =========================================================================
 
 function benchArchetypeChurn(entityCount) {
+  const Position = component('ChPos', 'f32', ['x', 'y']);
+  const Health = component('ChHp', 'f32', ['hp']);
   const em = createEntityManager();
-  const Position = Symbol('Position');
-  const Health = Symbol('Health');
 
   const ids = [];
   for (let i = 0; i < entityCount; i++) {
@@ -208,25 +186,22 @@ function benchBitECSChurn(entityCount) {
 
 // Warmup
 benchArchetypeLoop(100);
-benchArchetypeTypedLoop(100);
 benchBitECSLoop(100);
 
 console.log(`\n=== System loop: Position += Velocity (${FRAMES} frames, per-frame time) ===\n`);
-console.log('Entities    | arch (now)    | arch+typed   | bitECS       | arch+typed vs bitECS');
-console.log('------------|---------------|--------------|--------------|---------------------');
+console.log('Entities    | archetype-ecs | bitECS       | Δ');
+console.log('------------|---------------|--------------|---------------------');
 
 for (const count of ENTITY_COUNTS) {
   const arch = benchArchetypeLoop(count);
-  const archTyped = benchArchetypeTypedLoop(count);
   const bit = benchBitECSLoop(count);
-  const vsNow = arch / archTyped;
-  const vsBit = bit / archTyped;
+  const ratio = bit / arch;
+  const label = ratio > 1.1 ? `arch ${ratio.toFixed(1)}x sneller` : ratio < 0.9 ? `bitECS ${(1/ratio).toFixed(1)}x sneller` : '~gelijk';
   console.log(
     `${pad(count.toLocaleString(), 11)} | ` +
     `${pad(arch.toFixed(3), 10)} ms | ` +
-    `${pad(archTyped.toFixed(3), 9)} ms | ` +
     `${pad(bit.toFixed(3), 9)} ms | ` +
-    `${vsBit > 1.1 ? `arch+typed ${vsBit.toFixed(1)}x sneller` : vsBit < 0.9 ? `bitECS ${(1/vsBit).toFixed(1)}x sneller` : '~gelijk'}`
+    `${label}`
   );
 }
 

@@ -2,7 +2,7 @@
 // Tests: iteration (Position += Velocity), entity creation, memory usage
 // Run with: node --expose-gc bench/multi-ecs-bench.js
 
-import { createEntityManager, component } from '../src/index.js';
+import { createEntityManager, component } from '../dist/index.js';
 
 const COUNT = 1_000_000;
 const FRAMES = 500;

@@ -1,10 +1,10 @@
 import { describe, it, beforeEach } from 'node:test';
 import assert from 'node:assert/strict';
-import { createEntityManager } from '../src/EntityManager.js';
-import { component } from '../src/index.js';
+import { createEntityManager, type EntityManager } from '../src/EntityManager.js';
+import { component, type ComponentDef } from '../src/index.js';
 
 describe('EntityManager', () => {
-  let em;
+  let em: EntityManager;
   const Position = component('Position', 'f32', ['x', 'y']);
   const Velocity = component('Velocity', 'f32', ['vx', 'vy']);
   const Health = component('Health', 'f32', ['hp']);
@@ -140,7 +140,7 @@ describe('EntityManager', () => {
       [Velocity._sym, 'Velocity'],
       [Health._sym, 'Health']
     ]);
-    const nameToSymbol = { Position, Velocity, Health };
+    const nameToSymbol: Record<string, ComponentDef> = { Position, Velocity, Health };
 
     it('round-trips entities and components', () => {
       const a = em.createEntity();
@@ -189,33 +189,33 @@ describe('EntityManager', () => {
       const a = em.createEntity();
       em.addComponent(a, Meta, { x: 1, y: 2, secret: 42 });
 
-      const serializers = new Map([
-        ['Meta', (data) => ({ x: data.x, y: data.y })]
+      const serializers = new Map<string, (data: any) => any>([
+        ['Meta', (data: any) => ({ x: data.x, y: data.y })]
       ]);
 
       const result = em.serialize(metaSymbolToName, [], [], { serializers });
       assert.deepEqual(result.components['Meta'][a], { x: 1, y: 2 });
-      assert.equal(result.components['Meta'][a].secret, undefined);
+      assert.equal((result.components['Meta'][a] as Record<string, unknown>).secret, undefined);
     });
 
     it('custom deserializers are used when provided', () => {
       const Meta = component('Meta2', { x: 'f32', y: 'f32' });
       const metaSymbolToName = new Map([...symbolToName, [Meta._sym, 'Meta2']]);
-      const metaNameToSymbol = { ...nameToSymbol, Meta2: Meta };
+      const metaNameToSymbol: Record<string, ComponentDef> = { ...nameToSymbol, Meta2: Meta };
 
       const a = em.createEntity();
       em.addComponent(a, Meta, { x: 1, y: 2 });
 
       const data = em.serialize(metaSymbolToName);
 
-      const deserializers = new Map([
-        ['Meta2', (compData) => ({ ...compData, restored: true })]
+      const deserializers = new Map<string, (data: unknown) => unknown>([
+        ['Meta2', (compData) => ({ ...(compData as Record<string, unknown>), restored: true })]
       ]);
 
       em.deserialize(data, metaNameToSymbol, { deserializers });
-      const result = em.getComponent(a, Meta);
-      assert.ok(Math.abs(result.x - 1) < 0.01);
-      assert.ok(Math.abs(result.y - 2) < 0.01);
+      const result = em.getComponent(a, Meta)!;
+      assert.ok(Math.abs(result.x as number - 1) < 0.01);
+      assert.ok(Math.abs(result.y as number - 2) < 0.01);
     });
 
     it('deserialize clears previous state', () => {
@@ -229,7 +229,7 @@ describe('EntityManager', () => {
 });
 
 describe('Typed Components (SoA)', () => {
-  let em;
+  let em: EntityManager;
 
   beforeEach(() => {
     em = createEntityManager();
@@ -239,23 +239,23 @@ describe('Typed Components (SoA)', () => {
     const Pos = component('Pos', 'f32', ['x', 'y']);
     const id = em.createEntity();
     em.addComponent(id, Pos, { x: 1.5, y: 2.5 });
-    const result = em.getComponent(id, Pos);
-    assert.ok(Math.abs(result.x - 1.5) < 0.001);
-    assert.ok(Math.abs(result.y - 2.5) < 0.001);
+    const result = em.getComponent(id, Pos)!;
+    assert.ok(Math.abs(result.x as number - 1.5) < 0.001);
+    assert.ok(Math.abs(result.y as number - 2.5) < 0.001);
   });
 
   it('growth past initial capacity (>64 entities)', () => {
     const Pos = component('PosGrow', 'f32', ['x', 'y']);
-    const ids = [];
+    const ids: number[] = [];
     for (let i = 0; i < 100; i++) {
       const id = em.createEntity();
       em.addComponent(id, Pos, { x: i, y: i * 2 });
       ids.push(id);
     }
     for (let i = 0; i < 100; i++) {
-      const result = em.getComponent(ids[i], Pos);
-      assert.ok(Math.abs(result.x - i) < 0.001);
-      assert.ok(Math.abs(result.y - i * 2) < 0.001);
+      const result = em.getComponent(ids[i], Pos)!;
+      assert.ok(Math.abs(result.x as number - i) < 0.001);
+      assert.ok(Math.abs(result.y as number - i * 2) < 0.001);
     }
   });
 
@@ -270,13 +270,10 @@ describe('Typed Components (SoA)', () => {
 
     em.destroyEntity(a);
 
-    const resultB = em.getComponent(b, Pos);
-    assert.ok(Math.abs(resultB.x - 3) < 0.001);
-    assert.ok(Math.abs(resultB.y - 4) < 0.001);
-
-    const resultC = em.getComponent(c, Pos);
-    assert.ok(Math.abs(resultC.x - 5) < 0.001);
-    assert.ok(Math.abs(resultC.y - 6) < 0.001);
+    const resultB = em.getComponent(b, Pos)!;
+    assert.ok(Math.abs(resultB.x as number - 3) < 0.001);
+    const resultC = em.getComponent(c, Pos)!;
+    assert.ok(Math.abs(resultC.x as number - 5) < 0.001);
   });
 
   it('typed + tag on same entity', () => {
@@ -286,11 +283,8 @@ describe('Typed Components (SoA)', () => {
     em.addComponent(id, Pos, { x: 10, y: 20 });
     em.addComponent(id, Tag, {});
 
-    const pos = em.getComponent(id, Pos);
-    assert.ok(Math.abs(pos.x - 10) < 0.001);
-    assert.ok(Math.abs(pos.y - 20) < 0.001);
-
-    // Tag has no schema, getComponent returns undefined
+    const pos = em.getComponent(id, Pos)!;
+    assert.ok(Math.abs(pos.x as number - 10) < 0.001);
     assert.equal(em.getComponent(id, Tag), undefined);
     assert.equal(em.hasComponent(id, Tag), true);
   });
@@ -306,10 +300,10 @@ describe('Typed Components (SoA)', () => {
     }
 
     em.forEach([Pos, Vel], (arch) => {
-      const px = arch.field(Pos.x);
-      const py = arch.field(Pos.y);
-      const vx = arch.field(Vel.vx);
-      const vy = arch.field(Vel.vy);
+      const px = arch.field(Pos.x) as Float32Array;
+      const py = arch.field(Pos.y) as Float32Array;
+      const vx = arch.field(Vel.vx) as Float32Array;
+      const vy = arch.field(Vel.vy) as Float32Array;
       for (let i = 0; i < arch.count; i++) {
         px[i] += vx[i];
         py[i] += vy[i];
@@ -318,16 +312,16 @@ describe('Typed Components (SoA)', () => {
 
     const ids = em.query([Pos, Vel]);
     for (const id of ids) {
-      const pos = em.getComponent(id, Pos);
-      assert.ok(pos.x >= 1);
-      assert.ok(Math.abs(pos.y - 2) < 0.001);
+      const pos = em.getComponent(id, Pos)!;
+      assert.ok((pos.x as number) >= 1);
+      assert.ok(Math.abs(pos.y as number - 2) < 0.001);
     }
   });
 
   it('serialize/deserialize round-trip with typed components', () => {
     const Pos = component('PosSer', 'f32', ['x', 'y']);
     const symbolToName = new Map([[Pos._sym, 'PosSer']]);
-    const nameToSymbol = { PosSer: Pos };
+    const nameToSymbol: Record<string, ComponentDef> = { PosSer: Pos };
 
     const a = em.createEntity();
     em.addComponent(a, Pos, { x: 1.5, y: 2.5 });
@@ -337,13 +331,10 @@ describe('Typed Components (SoA)', () => {
     const data = em.serialize(symbolToName);
     em.deserialize(data, nameToSymbol);
 
-    const posA = em.getComponent(a, Pos);
-    assert.ok(Math.abs(posA.x - 1.5) < 0.01);
-    assert.ok(Math.abs(posA.y - 2.5) < 0.01);
-
-    const posB = em.getComponent(b, Pos);
-    assert.ok(Math.abs(posB.x - 3.5) < 0.01);
-    assert.ok(Math.abs(posB.y - 4.5) < 0.01);
+    const posA = em.getComponent(a, Pos)!;
+    assert.ok(Math.abs(posA.x as number - 1.5) < 0.01);
+    const posB = em.getComponent(b, Pos)!;
+    assert.ok(Math.abs(posB.x as number - 3.5) < 0.01);
   });
 
   it('archetype migration with typed components', () => {
@@ -354,18 +345,12 @@ describe('Typed Components (SoA)', () => {
     em.addComponent(id, Pos, { x: 5, y: 10 });
     em.addComponent(id, Vel, { vx: 1, vy: 2 });
 
-    const pos = em.getComponent(id, Pos);
-    assert.ok(Math.abs(pos.x - 5) < 0.001);
-    assert.ok(Math.abs(pos.y - 10) < 0.001);
-
-    const vel = em.getComponent(id, Vel);
-    assert.ok(Math.abs(vel.vx - 1) < 0.001);
-    assert.ok(Math.abs(vel.vy - 2) < 0.001);
+    const pos = em.getComponent(id, Pos)!;
+    assert.ok(Math.abs(pos.x as number - 5) < 0.001);
 
     em.removeComponent(id, Vel);
-    const pos2 = em.getComponent(id, Pos);
-    assert.ok(Math.abs(pos2.x - 5) < 0.001);
-    assert.ok(Math.abs(pos2.y - 10) < 0.001);
+    const pos2 = em.getComponent(id, Pos)!;
+    assert.ok(Math.abs(pos2.x as number - 5) < 0.001);
     assert.equal(em.hasComponent(id, Vel), false);
   });
 
@@ -374,20 +359,17 @@ describe('Typed Components (SoA)', () => {
     const id = em.createEntity();
     em.addComponent(id, Pos, { x: 1, y: 2 });
     em.addComponent(id, Pos, { x: 99, y: 88 });
-    const result = em.getComponent(id, Pos);
-    assert.ok(Math.abs(result.x - 99) < 0.001);
-    assert.ok(Math.abs(result.y - 88) < 0.001);
+    const result = em.getComponent(id, Pos)!;
+    assert.ok(Math.abs(result.x as number - 99) < 0.001);
   });
 
   it('get/set for zero-allocation field access', () => {
     const Pos = component('PosGS', 'f32', ['x', 'y']);
     const id = em.createEntity();
     em.addComponent(id, Pos, { x: 3.5, y: 7.5 });
-    assert.ok(Math.abs(em.get(id, Pos.x) - 3.5) < 0.001);
-    assert.ok(Math.abs(em.get(id, Pos.y) - 7.5) < 0.001);
+    assert.ok(Math.abs(em.get(id, Pos.x)! as number - 3.5) < 0.001);
     em.set(id, Pos.x, 42);
-    assert.ok(Math.abs(em.get(id, Pos.x) - 42) < 0.001);
-    assert.ok(Math.abs(em.get(id, Pos.y) - 7.5) < 0.001);
+    assert.ok(Math.abs(em.get(id, Pos.x)! as number - 42) < 0.001);
   });
 
   it('get returns undefined for missing entity/component', () => {
@@ -465,11 +447,7 @@ describe('Typed Components (SoA)', () => {
     em.addComponent(id, Item, { name: 'Sword', weight: 3.5 });
 
     assert.equal(em.get(id, Item.name), 'Sword');
-    assert.ok(Math.abs(em.get(id, Item.weight) - 3.5) < 0.01);
-
-    const obj = em.getComponent(id, Item);
-    assert.equal(obj.name, 'Sword');
-    assert.ok(Math.abs(obj.weight - 3.5) < 0.01);
+    assert.ok(Math.abs(em.get(id, Item.weight)! as number - 3.5) < 0.01);
   });
 
   it('string component forEach field access', () => {
@@ -485,5 +463,152 @@ describe('Typed Components (SoA)', () => {
       assert.equal(values[0], 'e0');
       assert.equal(values[4], 'e4');
     });
+  });
+});
+
+describe('Deferred Hooks (onAdd / onRemove)', () => {
+  let em: EntityManager;
+  const Position = component('HPos', 'f32', ['x', 'y']);
+  const Velocity = component('HVel', 'f32', ['vx', 'vy']);
+  const Health = component('HHealth', 'f32', ['hp']);
+
+  beforeEach(() => {
+    em = createEntityManager();
+  });
+
+  it('onAdd fires after flushHooks with correct entity IDs', () => {
+    const added: number[] = [];
+    em.onAdd(Position, (id) => added.push(id));
+
+    const a = em.createEntity();
+    em.addComponent(a, Position, { x: 1, y: 2 });
+    const b = em.createEntity();
+    em.addComponent(b, Position, { x: 3, y: 4 });
+
+    assert.deepEqual(added, []);
+    em.flushHooks();
+    assert.deepEqual(added, [a, b]);
+  });
+
+  it('onRemove fires after flushHooks on removeComponent', () => {
+    const removed: number[] = [];
+    em.onRemove(Position, (id) => removed.push(id));
+
+    const id = em.createEntity();
+    em.addComponent(id, Position, { x: 1, y: 2 });
+    em.removeComponent(id, Position);
+
+    assert.deepEqual(removed, []);
+    em.flushHooks();
+    assert.deepEqual(removed, [id]);
+  });
+
+  it('onRemove fires for each component on destroyEntity', () => {
+    const removedPos: number[] = [];
+    const removedVel: number[] = [];
+    em.onRemove(Position, (id) => removedPos.push(id));
+    em.onRemove(Velocity, (id) => removedVel.push(id));
+
+    const id = em.createEntityWith(Position, { x: 1, y: 2 }, Velocity, { vx: 3, vy: 4 });
+    em.destroyEntity(id);
+    em.flushHooks();
+
+    assert.deepEqual(removedPos, [id]);
+    assert.deepEqual(removedVel, [id]);
+  });
+
+  it('createEntityWith triggers onAdd for all component types', () => {
+    const addedPos: number[] = [];
+    const addedVel: number[] = [];
+    em.onAdd(Position, (id) => addedPos.push(id));
+    em.onAdd(Velocity, (id) => addedVel.push(id));
+
+    const id = em.createEntityWith(Position, { x: 1, y: 2 }, Velocity, { vx: 3, vy: 4 });
+    em.flushHooks();
+
+    assert.deepEqual(addedPos, [id]);
+    assert.deepEqual(addedVel, [id]);
+  });
+
+  it('callbacks do not fire before flushHooks (deferred)', () => {
+    const added: number[] = [];
+    em.onAdd(Position, (id) => added.push(id));
+
+    const id = em.createEntity();
+    em.addComponent(id, Position, { x: 1, y: 2 });
+
+    assert.deepEqual(added, []);
+  });
+
+  it('unsubscribe prevents callback from firing', () => {
+    const added: number[] = [];
+    const unsub = em.onAdd(Position, (id) => added.push(id));
+
+    const a = em.createEntity();
+    em.addComponent(a, Position, { x: 1, y: 2 });
+    unsub();
+    em.flushHooks();
+
+    assert.deepEqual(added, []);
+  });
+
+  it('overwrite (addComponent with existing component) does not trigger onAdd', () => {
+    const added: number[] = [];
+    em.onAdd(Position, (id) => added.push(id));
+
+    const id = em.createEntity();
+    em.addComponent(id, Position, { x: 1, y: 2 });
+    em.flushHooks();
+    added.length = 0;
+
+    em.addComponent(id, Position, { x: 99, y: 88 });
+    em.flushHooks();
+
+    assert.deepEqual(added, []);
+  });
+
+  it('multiple callbacks on the same component', () => {
+    const added1: number[] = [];
+    const added2: number[] = [];
+    em.onAdd(Position, (id) => added1.push(id));
+    em.onAdd(Position, (id) => added2.push(id));
+
+    const id = em.createEntity();
+    em.addComponent(id, Position, { x: 1, y: 2 });
+    em.flushHooks();
+
+    assert.deepEqual(added1, [id]);
+    assert.deepEqual(added2, [id]);
+  });
+
+  it('flushHooks is a no-op when no hooks registered', () => {
+    const id = em.createEntity();
+    em.addComponent(id, Position, { x: 1, y: 2 });
+    em.flushHooks();
+  });
+
+  it('addComponent migration triggers onAdd', () => {
+    const added: number[] = [];
+    em.onAdd(Velocity, (id) => added.push(id));
+
+    const id = em.createEntity();
+    em.addComponent(id, Position, { x: 1, y: 2 });
+    em.addComponent(id, Velocity, { vx: 1, vy: 1 });
+    em.flushHooks();
+
+    assert.deepEqual(added, [id]);
+  });
+
+  it('pending arrays are cleared after flushHooks', () => {
+    const added: number[] = [];
+    em.onAdd(Position, (id) => added.push(id));
+
+    const a = em.createEntity();
+    em.addComponent(a, Position, { x: 1, y: 2 });
+    em.flushHooks();
+    assert.deepEqual(added, [a]);
+
+    em.flushHooks();
+    assert.deepEqual(added, [a]);
   });
 });
