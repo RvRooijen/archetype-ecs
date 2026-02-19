@@ -466,6 +466,184 @@ describe('Typed Components (SoA)', () => {
   });
 });
 
+describe('Deferred Structural Changes during forEach', () => {
+  let em: EntityManager;
+  const Pos = component('DPos', 'f32', ['x', 'y']);
+  const Vel = component('DVel', 'f32', ['vx', 'vy']);
+  const Tag = component('DTag');
+
+  beforeEach(() => {
+    em = createEntityManager();
+  });
+
+  it('removeComponent during forEach is deferred and applied after', () => {
+    const a = em.createEntity();
+    const b = em.createEntity();
+    const c = em.createEntity();
+    em.addComponent(a, Pos, { x: 1, y: 0 });
+    em.addComponent(b, Pos, { x: 2, y: 0 });
+    em.addComponent(c, Pos, { x: 3, y: 0 });
+
+    const visited: number[] = [];
+    em.forEach([Pos], (arch) => {
+      const ids = arch.entityIds;
+      for (let i = 0; i < arch.count; i++) {
+        visited.push(ids[i]);
+        // Remove first entity during iteration — should be deferred
+        if (ids[i] === a) {
+          em.removeComponent(a, Pos);
+        }
+      }
+    });
+
+    // All 3 should have been visited (removal was deferred)
+    assert.equal(visited.length, 3);
+    assert.ok(visited.includes(a));
+    assert.ok(visited.includes(b));
+    assert.ok(visited.includes(c));
+
+    // After forEach, the removal should have been applied
+    assert.equal(em.hasComponent(a, Pos), false);
+    assert.equal(em.hasComponent(b, Pos), true);
+    assert.equal(em.hasComponent(c, Pos), true);
+  });
+
+  it('addComponent (migration) during forEach is deferred', () => {
+    const a = em.createEntity();
+    const b = em.createEntity();
+    em.addComponent(a, Pos, { x: 1, y: 0 });
+    em.addComponent(b, Pos, { x: 2, y: 0 });
+
+    em.forEach([Pos], (arch) => {
+      const ids = arch.entityIds;
+      for (let i = 0; i < arch.count; i++) {
+        // Add a new component to entity a — causes migration, should be deferred
+        if (ids[i] === a) {
+          em.addComponent(a, Vel, { vx: 10, vy: 20 });
+        }
+      }
+    });
+
+    // After forEach, migration should have been applied
+    assert.equal(em.hasComponent(a, Vel), true);
+    const vel = em.getComponent(a, Vel);
+    assert.ok(Math.abs(vel.vx - 10) < 0.001);
+    assert.ok(Math.abs(vel.vy - 20) < 0.001);
+    // Original data preserved after migration
+    const pos = em.getComponent(a, Pos);
+    assert.ok(Math.abs(pos.x - 1) < 0.001);
+  });
+
+  it('addComponent overwrite during forEach is immediate (no migration)', () => {
+    const a = em.createEntity();
+    em.addComponent(a, Pos, { x: 1, y: 2 });
+
+    em.forEach([Pos], (arch) => {
+      const px = arch.field(Pos.x as any);
+      // Overwrite via addComponent — same archetype, should be immediate
+      em.addComponent(a, Pos, { x: 99, y: 88 });
+      // The array should reflect the change immediately
+      assert.ok(Math.abs(px[0] - 99) < 0.001);
+    });
+  });
+
+  it('destroyEntity during forEach is deferred', () => {
+    const a = em.createEntity();
+    const b = em.createEntity();
+    const c = em.createEntity();
+    em.addComponent(a, Pos, { x: 1, y: 0 });
+    em.addComponent(b, Pos, { x: 2, y: 0 });
+    em.addComponent(c, Pos, { x: 3, y: 0 });
+
+    const visited: number[] = [];
+    em.forEach([Pos], (arch) => {
+      const ids = arch.entityIds;
+      for (let i = 0; i < arch.count; i++) {
+        visited.push(ids[i]);
+        if (ids[i] === b) {
+          em.destroyEntity(b);
+        }
+      }
+    });
+
+    assert.equal(visited.length, 3);
+    // After forEach, entity b should be destroyed
+    assert.equal(em.hasComponent(b, Pos), false);
+    assert.deepEqual(em.getAllEntities().includes(b), false);
+  });
+
+  it('multiple deferred operations are applied in order', () => {
+    const a = em.createEntity();
+    em.addComponent(a, Pos, { x: 1, y: 0 });
+
+    em.forEach([Pos], () => {
+      // Remove Pos then add Vel — both deferred, applied in order
+      em.removeComponent(a, Pos);
+      em.addComponent(a, Vel, { vx: 5, vy: 6 });
+    });
+
+    assert.equal(em.hasComponent(a, Pos), false);
+    assert.equal(em.hasComponent(a, Vel), true);
+    const vel = em.getComponent(a, Vel);
+    assert.ok(Math.abs(vel.vx - 5) < 0.001);
+  });
+
+  it('nested forEach properly defers until outermost forEach completes', () => {
+    const a = em.createEntity();
+    const b = em.createEntity();
+    em.addComponent(a, Pos, { x: 1, y: 0 });
+    em.addComponent(b, Vel, { vx: 2, vy: 0 });
+
+    let innerComplete = false;
+    em.forEach([Pos], () => {
+      em.forEach([Vel], () => {
+        em.removeComponent(b, Vel);
+        innerComplete = true;
+      });
+      // After inner forEach, structural change is still deferred
+      // (outermost forEach is still running)
+      assert.equal(innerComplete, true);
+      assert.equal(em.hasComponent(b, Vel), true); // live state — still deferred
+    });
+
+    // Now outermost forEach is done — deferred ops should be flushed
+    assert.equal(em.hasComponent(b, Vel), false);
+  });
+
+  it('em.set() remains immediate during forEach', () => {
+    const a = em.createEntity();
+    em.addComponent(a, Pos, { x: 1, y: 2 });
+
+    em.forEach([Pos], (arch) => {
+      em.set(a, Pos.x as any, 42);
+      // Should be immediately visible
+      const px = arch.field(Pos.x as any);
+      assert.ok(Math.abs(px[0] - 42) < 0.001);
+    });
+  });
+
+  it('hooks still fire correctly with deferred structural changes', () => {
+    const added: number[] = [];
+    const removed: number[] = [];
+    em.onAdd(Vel, (id) => added.push(id));
+    em.onRemove(Pos, (id) => removed.push(id));
+
+    const a = em.createEntity();
+    em.addComponent(a, Pos, { x: 1, y: 0 });
+    em.flushHooks();
+
+    em.forEach([Pos], () => {
+      em.removeComponent(a, Pos);
+      em.addComponent(a, Vel, { vx: 1, vy: 2 });
+    });
+
+    // Deferred ops were applied, hooks should be pending
+    em.flushHooks();
+    assert.deepEqual(removed, [a]);
+    assert.deepEqual(added, [a]);
+  });
+});
+
 describe('Deferred Hooks (onAdd / onRemove)', () => {
   let em: EntityManager;
   const Position = component('HPos', 'f32', ['x', 'y']);
