@@ -11,12 +11,12 @@ export { isWasmSimdAvailable } from './wasm-kernels.js';
 import { parseTypeSpec, componentSchemas, type ComponentDef, type FieldRef, type TypeSpec } from './ComponentRegistry.js';
 
 // Tag component (no fields)
-export function component(name: string): ComponentDef;
+export function component(name: string): ComponentDef<Record<never, never>>;
 // Uniform type with field list
-export function component<const F extends readonly string[]>(name: string, type: string, fields: F): ComponentDef<F[number]>;
+export function component<const F extends readonly string[], const T extends string>(name: string, type: T, fields: F): ComponentDef<Record<F[number], T>>;
 // Schema object with mixed types
-export function component<S extends Record<string, string>>(name: string, schema: S): ComponentDef<Extract<keyof S, string>>;
-export function component(name: string, typeOrSchema?: string | Record<string, string>, fields?: string[]): ComponentDef<string> {
+export function component<const S extends Record<string, string>>(name: string, schema: S): ComponentDef<S>;
+export function component(name: string, typeOrSchema?: string | Record<string, string>, fields?: string[]): ComponentDef {
   const sym = Symbol(name);
   const comp: Record<string, unknown> = { _sym: sym, _name: name };
 
@@ -41,5 +41,5 @@ export function component(name: string, typeOrSchema?: string | Record<string, s
     componentSchemas.set(sym, schema);
   }
 
-  return comp as ComponentDef<string>;
+  return comp as ComponentDef;
 }

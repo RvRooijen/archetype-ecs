@@ -42,7 +42,7 @@ export interface EntityManager {
   addComponent(entityId: EntityId, type: ComponentDef, data?: ComponentData): void;
   removeComponent(entityId: EntityId, type: ComponentDef): void;
   getComponent(entityId: EntityId, type: ComponentDef): Record<string, number | string | number[]> | undefined;
-  get(entityId: EntityId, fieldRef: FieldRef): number | string | undefined;
+  get<T extends number | string>(entityId: EntityId, fieldRef: FieldRef<T>): T | undefined;
   set(entityId: EntityId, fieldRef: FieldRef, value: number | string | ArrayLike<number>): void;
   hasComponent(entityId: EntityId, type: ComponentDef): boolean;
   query(include: ComponentDef[], exclude?: ComponentDef[]): EntityId[];
@@ -664,7 +664,7 @@ export function createEntityManager(options?: { wasm?: boolean }): EntityManager
       return undefined;
     },
 
-    get(entityId: EntityId, fieldRef: FieldRef): number | string | undefined {
+    get<T extends number | string>(entityId: EntityId, fieldRef: FieldRef<T>): T | undefined {
       const arch = entityArchetype.get(entityId);
       if (arch) {
         const store = arch.components.get(fieldRef._sym);
@@ -673,7 +673,7 @@ export function createEntityManager(options?: { wasm?: boolean }): EntityManager
           const size = store._arraySizes[fieldRef._field] || 0;
           if (size > 0) {
             const base = idx * size;
-            return (store._fields[fieldRef._field] as Float32Array).subarray(base, base + size) as unknown as number;
+            return (store._fields[fieldRef._field] as Float32Array).subarray(base, base + size) as unknown as T;
           }
           return (store._fields[fieldRef._field] as never[])[idx];
         }
@@ -682,7 +682,7 @@ export function createEntityManager(options?: { wasm?: boolean }): EntityManager
       const removed = removedData.get(entityId);
       if (removed) {
         const compData = removed.get(fieldRef._sym);
-        if (compData) return compData[fieldRef._field] as number | string;
+        if (compData) return compData[fieldRef._field] as T;
       }
       return undefined;
     },

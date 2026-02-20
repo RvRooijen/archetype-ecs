@@ -33,7 +33,8 @@ em.addComponent(id, Name, { name: 'Hero', title: 'Sir' });
 const pos = em.getComponent(id, Position);
 
 // get/set: field descriptor access
-const px = em.get(id, Position.x);
+const px: number | undefined = em.get(id, Position.x);
+const pname: string | undefined = em.get(id, Name.name);
 em.set(id, Position.x, 10);
 
 // forEach: callback receives EntityId

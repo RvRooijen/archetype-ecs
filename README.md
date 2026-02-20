@@ -153,7 +153,7 @@ For per-entity logic with conditional branches or structural changes.
 ```ts
 // mark entities with no health as dead
 em.forEach([Health], (id) => {
-  if ((em.get(id, Health.hp) as number) <= 0) em.addComponent(id, Dead)
+  if (em.get(id, Health.hp)! <= 0) em.addComponent(id, Dead)
 }, [Dead]) // skip already-dead entities
 ```
 

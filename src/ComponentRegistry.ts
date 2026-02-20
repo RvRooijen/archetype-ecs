@@ -34,15 +34,17 @@ export function parseTypeSpec(typeStr: string): TypeSpec {
 
 export const componentSchemas = new Map<symbol, Record<string, TypeSpec>>();
 
-export interface FieldRef {
+type FieldValue<S extends string> = S extends 'string' ? string : number;
+
+export interface FieldRef<T extends number | string = number | string> {
   readonly _sym: symbol;
   readonly _field: string;
 }
 
-export type ComponentDef<F extends string = never> = {
+export type ComponentDef<Schema extends Record<string, string> = Record<never, never>> = {
   readonly _sym: symbol;
   readonly _name: string;
-} & { readonly [K in F]: FieldRef };
+} & { readonly [K in keyof Schema]: FieldRef<FieldValue<Schema[K]>> };
 
 export function toSym(type: ComponentDef | symbol): symbol {
   return (type as ComponentDef)._sym || (type as symbol);
