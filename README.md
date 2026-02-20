@@ -32,8 +32,9 @@ for (let i = 0; i < 10_000; i++) {
   em.createEntityWith(Position, { x: Math.random() * 800, y: Math.random() * 600 })
 }
 
-em.apply(Position.x, add(Position.x, random(-0.5, 0.5)))  // ~0.3 ms base + ~0.3 ms random
-em.apply(Position.y, add(Position.y, random(-0.5, 0.5)))  // 1M entities each
+// ~0.3 ms base + ~0.3 ms random, 1M entities each
+em.apply(Position.x, add(Position.x, random(-0.5, 0.5)))
+em.apply(Position.y, add(Position.y, random(-0.5, 0.5)))
 ```
 
 ---
@@ -93,7 +94,8 @@ for (let i = 0; i < 10_000; i++) {
   )
 }
 
-em.hasComponent(player, Health)   // true
+// true
+em.hasComponent(player, Health)
 em.removeComponent(player, Health)
 em.destroyEntity(player)
 ```
@@ -102,13 +104,17 @@ em.destroyEntity(player)
 
 ```ts
 // Access a single field (doesn't allocate)
-em.get(player, Position.x)         // 0
-em.get(player, Name.name)          // 'Hero'
+// => 0
+em.get(player, Position.x)
+// => 'Hero'
+em.get(player, Name.name)
 em.set(player, Velocity.vx, 5)
 
 // Or grab the whole component as an object (allocates)
-em.getComponent(player, Position)  // { x: 0, y: 0 }
-em.getComponent(player, Name)      // { name: 'Hero', title: 'Sir' }
+// => { x: 0, y: 0 }
+em.getComponent(player, Position)
+// => { name: 'Hero', title: 'Sir' }
+em.getComponent(player, Name)
 ```
 
 ### Iteration — `apply`, `forEach`, and `query`
@@ -122,11 +128,15 @@ The primary way to update fields every frame. Required components are inferred f
 ```ts
 import { add, sub, scale, random } from 'archetype-ecs'
 
-em.apply(Position.x, add(Position.x, Velocity.vx))     // ~0.3 ms / 1M entities
-em.apply(Position.y, add(Position.y, Velocity.vy))     // ~0.3 ms / 1M entities
-em.apply(Velocity.vx, scale(Velocity.vx, 0.99))        // friction
-em.apply(Position.x, add(Position.x, random(-1, 1)))   // px += random(-1, 1)
-em.apply(Position.x, random(0, 800))                   // scatter to random positions
+// ~0.3 ms / 1M entities each
+em.apply(Position.x, add(Position.x, Velocity.vx))
+em.apply(Position.y, add(Position.y, Velocity.vy))
+// friction
+em.apply(Velocity.vx, scale(Velocity.vx, 0.99))
+// shift each entity by a random amount
+em.apply(Position.x, add(Position.x, random(-1, 1)))
+// scatter to random positions
+em.apply(Position.x, random(0, 800))
 ```
 
 #### `forEach` — batch processing with TypedArray access
@@ -135,7 +145,8 @@ For per-entity logic that needs both raw field data and entity IDs. You get the 
 
 ```ts
 // mark entities with no health as dead — needs entity IDs + conditional branch
-em.forEach([Health], (arch) => {                 // ~2.8 ms / 1M entities (JS loop)
+// ~2.8 ms / 1M entities (JS loop)
+em.forEach([Health], (arch) => {
   const hp = arch.field(Health.hp)
   const ids = arch.entityIds
   for (let i = 0; i < arch.count; i++) {
@@ -150,7 +161,8 @@ Returns a flat list of entity IDs. Use when you need to relate entities to each 
 
 ```ts
 // Find the closest enemy to the player
-const enemies = em.query([Position, Enemy])         // allocates number[] — ~21 ms / 1M entities
+// allocates number[] — ~21 ms / 1M entities
+const enemies = em.query([Position, Enemy])
 let closest = -1, minDist = Infinity
 for (const id of enemies) {
   const dx = em.get(id, Position.x) - playerX
@@ -237,12 +249,18 @@ Supports stripping components, skipping entities, and custom serializers.
 `em.apply` runs SIMD-accelerated bulk math — no loops, no raw arrays. Available expressions:
 
 ```ts
-add(a, b)              // a[i] + b[i]
-sub(a, b)              // a[i] - b[i]
-mul(a, b)              // a[i] * b[i]
-scale(a, s)            // a[i] * s
-random(min, max)       // fill with random values in [min, max]
-add(a, random(min, max))  // a[i] + random value in [min, max]
+// a[i] + b[i]
+add(a, b)
+// a[i] - b[i]
+sub(a, b)
+// a[i] * b[i]
+mul(a, b)
+// a[i] * s
+scale(a, s)
+// fill with random values in [min, max]
+random(min, max)
+// a[i] + random value in [min, max]
+add(a, random(min, max))
 ```
 
 `random()` uses a vectorized LCG (Linear Congruential Generator) in the WASM module — 4 random floats per SIMD instruction, fully independent of `Math.random()`. `b` in `add`/`sub`/`mul` can be either a field reference or a `random()` expression.
@@ -273,8 +291,10 @@ WASM SIMD is supported in all modern browsers (Chrome 91+, Firefox 89+, Safari 1
 ```ts
 import { isWasmSimdAvailable } from 'archetype-ecs'
 
-isWasmSimdAvailable()                      // true if runtime supports SIMD
-createEntityManager({ wasm: false })       // force JS-only mode
+// true if runtime supports SIMD
+isWasmSimdAvailable()
+// force JS-only mode
+createEntityManager({ wasm: false })
 ```
 
 #### How SIMD acceleration works
@@ -300,13 +320,18 @@ Component types are inferred from their definition. Field names autocomplete, wr
 // Schema is inferred — Position becomes ComponentDef<'x' | 'y'>
 const Position = component('Position', 'f32', ['x', 'y'])
 
-Position.x                // FieldRef — autocompletes to .x and .y
-Position.z                // compile error: Property 'z' does not exist
+// FieldRef — autocompletes to .x and .y
+Position.x
+// compile error: Property 'z' does not exist
+Position.z
 
-em.get(id, Position.x)    // zero-alloc field access
-em.set(id, Position.x, 5) // zero-alloc field write
+// zero-alloc field access
+em.get(id, Position.x)
+// zero-alloc field write
+em.set(id, Position.x, 5)
 
-arch.field(Position.x)    // Float32Array — direct TypedArray access
+// Float32Array — direct TypedArray access
+arch.field(Position.x)
 ```
 
 ---
