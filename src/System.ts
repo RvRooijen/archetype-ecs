@@ -3,24 +3,20 @@ import type { EntityId, EntityManager, ArchetypeView } from './EntityManager.js'
 
 // ── Decorators (TC39 Stage 3) ────────────────────────────
 
-function getMethod(obj: object, name: string | symbol): Function {
-  return (obj as Record<string | symbol, Function>)[name];
-}
-
 export function OnAdded(...types: ComponentDef[]) {
-  return function (_method: Function, context: ClassMethodDecoratorContext) {
-    context.addInitializer(function () {
+  return function (method: (id: EntityId) => void, _context: ClassMethodDecoratorContext) {
+    _context.addInitializer(function () {
       const self = this as unknown as System;
-      self._registerHook('add', types, getMethod(self, context.name).bind(self));
+      self._registerHook('add', types, method.bind(self));
     });
   };
 }
 
 export function OnRemoved(...types: ComponentDef[]) {
-  return function (_method: Function, context: ClassMethodDecoratorContext) {
-    context.addInitializer(function () {
+  return function (method: (id: EntityId) => void, _context: ClassMethodDecoratorContext) {
+    _context.addInitializer(function () {
       const self = this as unknown as System;
-      self._registerHook('remove', types, getMethod(self, context.name).bind(self));
+      self._registerHook('remove', types, method.bind(self));
     });
   };
 }

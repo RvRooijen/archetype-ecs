@@ -295,6 +295,14 @@ export function createEntityManager(): EntityManager {
 
   const removedData = new Map<EntityId, Map<symbol, Record<string, number | string | number[]>>>();
 
+  // Deferred structural changes during forEach iteration
+  type DeferredOp =
+    | { kind: 'add'; entityId: EntityId; comp: ComponentDef; data?: ComponentData }
+    | { kind: 'remove'; entityId: EntityId; comp: ComponentDef }
+    | { kind: 'destroy'; entityId: EntityId };
+  let iterating = 0;
+  const deferred: DeferredOp[] = [];
+
   const componentBitIndex = new Map<symbol, number>();
   let nextBitIndex = 0;
 
@@ -432,6 +440,126 @@ export function createEntityManager(): EntityManager {
     return matching;
   }
 
+  function doDestroyEntity(id: EntityId): void {
+    const arch = entityArchetype.get(id);
+    if (arch) {
+      if (hooks) {
+        for (const type of arch.types) {
+          const pending = hooks.pendingRemove.get(type);
+          if (pending) pending.push(id);
+        }
+        if (hooks.removeCbs.size > 0) {
+          const idx = arch.entityToIndex.get(id)!;
+          let entitySnap: Map<symbol, Record<string, number | string | number[]>> | undefined;
+          for (const type of arch.types) {
+            if (hooks.removeCbs.has(type)) {
+              const store = arch.components.get(type);
+              if (store) {
+                if (!entitySnap) { entitySnap = new Map(); removedData.set(id, entitySnap); }
+                entitySnap.set(type, soaRead(store, idx));
+              }
+            }
+          }
+        }
+      }
+      if (destroyedSet && trackFilter && maskOverlaps(arch.key, trackFilter)) destroyedSet.add(id);
+      removeFromArchetype(arch, id);
+    }
+    allEntityIds.delete(id);
+  }
+
+  function doAddComponent(entityId: EntityId, comp: ComponentDef, data?: ComponentData): void {
+    const type = toSym(comp);
+    const arch = entityArchetype.get(entityId);
+
+    if (!arch) {
+      const newArch = getOrCreateArchetype([type]);
+      addToArchetype(newArch, entityId, new Map([[type, data]]));
+      if (hooks) {
+        const pending = hooks.pendingAdd.get(type);
+        if (pending) pending.push(entityId);
+      }
+      return;
+    }
+
+    if (arch.types.has(type)) {
+      const store = arch.components.get(type);
+      if (store) {
+        const idx = arch.entityToIndex.get(entityId)!;
+        soaWrite(store, idx, data);
+      }
+      return;
+    }
+
+    const newTypes = [...arch.types, type];
+    const newArch = getOrCreateArchetype(newTypes);
+
+    const idx = arch.entityToIndex.get(entityId)!;
+    const map = new Map<symbol, ComponentData>([[type, data]]);
+    for (const t of arch.types) {
+      map.set(t, readComponentData(arch, t, idx));
+    }
+
+    removeFromArchetype(arch, entityId);
+    addToArchetype(newArch, entityId, map);
+    if (hooks) {
+      const pending = hooks.pendingAdd.get(type);
+      if (pending) pending.push(entityId);
+    }
+  }
+
+  function doRemoveComponent(entityId: EntityId, comp: ComponentDef): void {
+    const type = toSym(comp);
+    const arch = entityArchetype.get(entityId);
+    if (!arch || !arch.types.has(type)) return;
+
+    if (hooks) {
+      const pending = hooks.pendingRemove.get(type);
+      if (pending) pending.push(entityId);
+      if (hooks.removeCbs.has(type)) {
+        const store = arch.components.get(type);
+        if (store) {
+          const idx = arch.entityToIndex.get(entityId)!;
+          if (!removedData.has(entityId)) removedData.set(entityId, new Map());
+          removedData.get(entityId)!.set(type, soaRead(store, idx));
+        }
+      }
+    }
+
+    if (destroyedSet && trackFilter && maskOverlaps(arch.key, trackFilter)) destroyedSet.add(entityId);
+
+    if (arch.types.size === 1) {
+      removeFromArchetype(arch, entityId);
+      return;
+    }
+
+    const newTypes: symbol[] = [];
+    for (const t of arch.types) {
+      if (t !== type) newTypes.push(t);
+    }
+    const newArch = getOrCreateArchetype(newTypes);
+
+    const idx = arch.entityToIndex.get(entityId)!;
+    const map = new Map<symbol, ComponentData>();
+    for (const t of newTypes) {
+      map.set(t, readComponentData(arch, t, idx));
+    }
+
+    removeFromArchetype(arch, entityId);
+    addToArchetype(newArch, entityId, map);
+  }
+
+  function flushDeferred(): void {
+    const ops = deferred.splice(0);
+    for (const op of ops) {
+      switch (op.kind) {
+        case 'add': doAddComponent(op.entityId, op.comp, op.data); break;
+        case 'remove': doRemoveComponent(op.entityId, op.comp); break;
+        case 'destroy': doDestroyEntity(op.entityId); break;
+      }
+    }
+  }
+
   return {
     createEntity(): EntityId {
       const id = nextId++;
@@ -440,114 +568,39 @@ export function createEntityManager(): EntityManager {
     },
 
     destroyEntity(id: EntityId): void {
-      const arch = entityArchetype.get(id);
-      if (arch) {
-        if (hooks) {
-          for (const type of arch.types) {
-            const pending = hooks.pendingRemove.get(type);
-            if (pending) pending.push(id);
-          }
-          // Snapshot component data so @OnRemoved hooks can still read it
-          if (hooks.removeCbs.size > 0) {
-            const idx = arch.entityToIndex.get(id)!;
-            let entitySnap: Map<symbol, Record<string, number | string | number[]>> | undefined;
-            for (const type of arch.types) {
-              if (hooks.removeCbs.has(type)) {
-                const store = arch.components.get(type);
-                if (store) {
-                  if (!entitySnap) { entitySnap = new Map(); removedData.set(id, entitySnap); }
-                  entitySnap.set(type, soaRead(store, idx));
-                }
-              }
-            }
-          }
-        }
-        if (destroyedSet && trackFilter && maskOverlaps(arch.key, trackFilter)) destroyedSet.add(id);
-        removeFromArchetype(arch, id);
+      if (iterating > 0) {
+        deferred.push({ kind: 'destroy', entityId: id });
+        return;
       }
-      allEntityIds.delete(id);
+      doDestroyEntity(id);
     },
 
     addComponent(entityId: EntityId, comp: ComponentDef, data?: ComponentData): void {
-      const type = toSym(comp);
-      const arch = entityArchetype.get(entityId);
-
-      if (!arch) {
-        const newArch = getOrCreateArchetype([type]);
-        addToArchetype(newArch, entityId, new Map([[type, data]]));
-        if (hooks) {
-          const pending = hooks.pendingAdd.get(type);
-          if (pending) pending.push(entityId);
-        }
-        return;
-      }
-
-      if (arch.types.has(type)) {
-        const store = arch.components.get(type);
-        if (store) {
-          const idx = arch.entityToIndex.get(entityId)!;
-          soaWrite(store, idx, data);
-        }
-        return;
-      }
-
-      const newTypes = [...arch.types, type];
-      const newArch = getOrCreateArchetype(newTypes);
-
-      const idx = arch.entityToIndex.get(entityId)!;
-      const map = new Map<symbol, ComponentData>([[type, data]]);
-      for (const t of arch.types) {
-        map.set(t, readComponentData(arch, t, idx));
-      }
-
-      removeFromArchetype(arch, entityId);
-      addToArchetype(newArch, entityId, map);
-      if (hooks) {
-        const pending = hooks.pendingAdd.get(type);
-        if (pending) pending.push(entityId);
-      }
-    },
-
-    removeComponent(entityId: EntityId, comp: ComponentDef): void {
-      const type = toSym(comp);
-      const arch = entityArchetype.get(entityId);
-      if (!arch || !arch.types.has(type)) return;
-
-      if (hooks) {
-        const pending = hooks.pendingRemove.get(type);
-        if (pending) pending.push(entityId);
-        // Snapshot removed component data so @OnRemoved hooks can still read it
-        if (hooks.removeCbs.has(type)) {
+      if (iterating > 0) {
+        // In-place overwrite (entity already has component) is safe — no migration
+        const type = toSym(comp);
+        const arch = entityArchetype.get(entityId);
+        if (arch && arch.types.has(type)) {
           const store = arch.components.get(type);
           if (store) {
             const idx = arch.entityToIndex.get(entityId)!;
-            if (!removedData.has(entityId)) removedData.set(entityId, new Map());
-            removedData.get(entityId)!.set(type, soaRead(store, idx));
+            soaWrite(store, idx, data);
           }
+          return;
         }
-      }
-
-      if (destroyedSet && trackFilter && maskOverlaps(arch.key, trackFilter)) destroyedSet.add(entityId);
-
-      if (arch.types.size === 1) {
-        removeFromArchetype(arch, entityId);
+        // Migration required — defer
+        deferred.push({ kind: 'add', entityId, comp, data });
         return;
       }
+      doAddComponent(entityId, comp, data);
+    },
 
-      const newTypes: symbol[] = [];
-      for (const t of arch.types) {
-        if (t !== type) newTypes.push(t);
+    removeComponent(entityId: EntityId, comp: ComponentDef): void {
+      if (iterating > 0) {
+        deferred.push({ kind: 'remove', entityId, comp });
+        return;
       }
-      const newArch = getOrCreateArchetype(newTypes);
-
-      const idx = arch.entityToIndex.get(entityId)!;
-      const map = new Map<symbol, ComponentData>();
-      for (const t of newTypes) {
-        map.set(t, readComponentData(arch, t, idx));
-      }
-
-      removeFromArchetype(arch, entityId);
-      addToArchetype(newArch, entityId, map);
+      doRemoveComponent(entityId, comp);
     },
 
     getComponent(entityId: EntityId, comp: ComponentDef): Record<string, number | string | number[]> | undefined {
@@ -659,34 +712,42 @@ export function createEntityManager(): EntityManager {
 
     forEach(includeTypes: ComponentDef[], callback: (view: ArchetypeView) => void, excludeTypes?: ComponentDef[]): void {
       const matching = getMatchingArchetypes(includeTypes, excludeTypes);
-      for (let a = 0; a < matching.length; a++) {
-        const arch = matching[a];
-        if (arch.count === 0) continue;
-        const snaps = arch.snapshots;
-        const view: ArchetypeView = {
-          id: arch.id,
-          entityIds: arch.entityIds,
-          count: arch.count,
-          snapshotEntityIds: arch.snapshotEntityIds,
-          snapshotCount: arch.snapshotCount,
-          field(ref: FieldRef) {
-            const store = arch.components.get(ref._sym);
-            if (!store) return undefined;
-            return store._fields[ref._field];
-          },
-          fieldStride(ref: FieldRef) {
-            const store = arch.components.get(ref._sym);
-            if (!store) return 1;
-            return store._arraySizes[ref._field] || 1;
-          },
-          snapshot(ref: FieldRef) {
-            if (!snaps) return undefined;
-            const snap = snaps.get(ref._sym);
-            if (!snap) return undefined;
-            return snap[ref._field];
-          }
-        };
-        callback(view);
+      iterating++;
+      try {
+        for (let a = 0; a < matching.length; a++) {
+          const arch = matching[a];
+          if (arch.count === 0) continue;
+          const snaps = arch.snapshots;
+          const view: ArchetypeView = {
+            id: arch.id,
+            entityIds: arch.entityIds,
+            count: arch.count,
+            snapshotEntityIds: arch.snapshotEntityIds,
+            snapshotCount: arch.snapshotCount,
+            field(ref: FieldRef) {
+              const store = arch.components.get(ref._sym);
+              if (!store) return undefined;
+              return store._fields[ref._field];
+            },
+            fieldStride(ref: FieldRef) {
+              const store = arch.components.get(ref._sym);
+              if (!store) return 1;
+              return store._arraySizes[ref._field] || 1;
+            },
+            snapshot(ref: FieldRef) {
+              if (!snaps) return undefined;
+              const snap = snaps.get(ref._sym);
+              if (!snap) return undefined;
+              return snap[ref._field];
+            }
+          };
+          callback(view);
+        }
+      } finally {
+        iterating--;
+        if (iterating === 0 && deferred.length > 0) {
+          flushDeferred();
+        }
       }
     },
 

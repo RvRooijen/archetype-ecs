@@ -130,7 +130,7 @@ Two ways to work with entities in bulk. Pick the right one for the job:
 Iterates over matching archetypes. You get the backing TypedArrays directly.
 
 ```ts
-function movementSystem(dt) {
+function movementSystem(dt: number) {
   em.forEach([Position, Velocity], (arch) => {
     const px = arch.field(Position.x)  // Float32Array
     const py = arch.field(Position.y)
@@ -183,7 +183,7 @@ const total = em.count([Position])
 Class-based systems with decorators for component lifecycle hooks:
 
 ```ts
-import { System, OnAdded, OnRemoved, createSystems } from 'archetype-ecs'
+import { System, OnAdded, OnRemoved, createSystems, type EntityId } from 'archetype-ecs'
 
 class MovementSystem extends System {
   tick() {
@@ -202,12 +202,12 @@ class MovementSystem extends System {
 
 class DeathSystem extends System {
   @OnAdded(Health)
-  onSpawn(id) {
+  onSpawn(id: EntityId) {
     console.log(`Entity ${id} spawned with ${this.em.get(id, Health.hp)} HP`)
   }
 
   @OnRemoved(Health)
-  onDeath(id) {
+  onDeath(id: EntityId) {
     this.em.addComponent(id, Dead)
   }
 }
@@ -261,32 +261,16 @@ Supports stripping components, skipping entities, and custom serializers.
 Component types are inferred from their definition. Field names autocomplete, wrong fields are compile errors.
 
 ```ts
-// Schema is inferred — Position becomes ComponentDef<{ x: number; y: number }>
+// Schema is inferred — Position becomes ComponentDef<'x' | 'y'>
 const Position = component('Position', 'f32', ['x', 'y'])
 
-Position.x                // autocompletes to .x and .y
-Position.z                // Property 'z' does not exist
+Position.x                // FieldRef — autocompletes to .x and .y
+Position.z                // compile error: Property 'z' does not exist
 
-em.get(id, Position.x)    // number | undefined
-em.set(id, Position.z, 5) // Property 'z' does not exist
+em.get(id, Position.x)    // zero-alloc field access
+em.set(id, Position.x, 5) // zero-alloc field write
 
-em.addComponent(id, Position, { x: 1, y: 2 })  // ok
-em.addComponent(id, Position, { x: 1 })         // Property 'y' is missing
-
-em.getComponent(id, Position)  // { x: number; y: number } | undefined
-```
-
-String fields are fully typed too:
-
-```ts
-const Name = component('Name', 'string', ['name', 'title'])
-
-em.get(id, Name.name)    // string | undefined
-em.set(id, Name.name, 'Hero')    // ok
-em.set(id, Name.name, 42)        // number not assignable to string
-
-em.addComponent(id, Name, { name: 'Hero', title: 'Sir' })  // ok
-em.addComponent(id, Name, { foo: 'bar' })                   // type error
+arch.field(Position.x)    // Float32Array — direct TypedArray access
 ```
 
 ---
