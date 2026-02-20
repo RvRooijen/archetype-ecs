@@ -129,15 +129,18 @@ em.apply(Position.x, add(Position.x, random(-1, 1)))   // px += random(-1, 1)
 em.apply(Position.x, random(0, 800))                   // scatter to random positions
 ```
 
-#### `forEach` — custom operations
+#### `forEach` — when you need entity IDs or conditional logic
 
-For logic that can't be expressed as simple math. You get the backing TypedArrays directly.
+For logic that reads entity IDs, branches per entity, or triggers structural changes. You get the backing TypedArrays and the entity ID list directly.
 
 ```ts
-em.forEach([Position, Velocity], (arch) => {
-  const vy = arch.field(Velocity.vy)
-  for (let i = 0; i < arch.count; i++)
-    vy[i] = Math.max(vy[i] - 9.81 * dt, -50)   // gravity + terminal velocity
+// mark entities with no health as dead — needs entity IDs + conditional branch
+em.forEach([Health], (arch) => {
+  const hp = arch.field(Health.hp)
+  const ids = arch.entityIds
+  for (let i = 0; i < arch.count; i++) {
+    if (hp[i] <= 0) em.addComponent(ids[i], Dead)
+  }
 })
 ```
 
