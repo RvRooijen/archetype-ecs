@@ -19,12 +19,24 @@ export class WasmArena {
   memory: WebAssembly.Memory;
   private nextOffset: number = 0;
   private views: ViewRegistration[] = [];
+  // Freed slots from growSoAStore, keyed by exact byte length for O(1) reuse
+  private freeLists: Map<number, number[]> = new Map();
 
   constructor(initialPages = 2048, maxPages = 16384) {
     this.memory = new WebAssembly.Memory({ initial: initialPages, maximum: maxPages });
   }
 
+  private free(offset: number, byteLength: number): void {
+    let list = this.freeLists.get(byteLength);
+    if (!list) this.freeLists.set(byteLength, list = []);
+    list.push(offset);
+  }
+
   alloc(byteLength: number): number {
+    // Reuse an exact-fit freed slot (from a previous grow) before bump allocating
+    const free = this.freeLists.get(byteLength);
+    if (free?.length) return free.pop()!;
+
     // Align up to 16 bytes
     const aligned = (this.nextOffset + ALIGN - 1) & ~(ALIGN - 1);
     const end = aligned + byteLength;
@@ -70,6 +82,8 @@ export class WasmArena {
     // Find and update the existing registration
     for (const reg of this.views) {
       if (reg.fields === fields && reg.field === field) {
+        // Return the old allocation to the free list so it can be reused
+        this.free(reg.offset, reg.count * reg.Ctor.BYTES_PER_ELEMENT);
         reg.offset = offset;
         reg.Ctor = Ctor;
         reg.count = count;
