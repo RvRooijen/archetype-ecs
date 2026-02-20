@@ -1,6 +1,6 @@
 {
   "name": "archetype-ecs",
-  "version": "1.4.2",
+  "version": "1.4.3",
   "description": "Lightweight archetype-based Entity Component System",
   "type": "module",
   "main": "dist/src/index.js",
