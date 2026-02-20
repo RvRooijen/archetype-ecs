@@ -19,24 +19,27 @@ An Entity Component System for games and simulations in TypeScript. Entities wit
 npm i archetype-ecs
 ```
 
+Create some entities and move them each frame:
+
 ```ts
-import { createEntityManager, component, add } from 'archetype-ecs'
+import { createEntityManager, component } from 'archetype-ecs'
 
 const Position = component('Position', 'f32', ['x', 'y'])
-const Velocity = component('Velocity', 'f32', ['vx', 'vy'])
 
 const em = createEntityManager()
 
 for (let i = 0; i < 10_000; i++) {
-  em.createEntityWith(
-    Position, { x: Math.random() * 800, y: Math.random() * 600 },
-    Velocity, { vx: Math.random() - 0.5, vy: Math.random() - 0.5 },
-  )
+  em.createEntityWith(Position, { x: Math.random() * 800, y: Math.random() * 600 })
 }
 
-// SIMD-accelerated — components inferred from the expression, no query needed
-em.apply(Position.x, add(Position.x, Velocity.vx))
-em.apply(Position.y, add(Position.y, Velocity.vy))
+em.forEach([Position], (arch) => {
+  const px = arch.field(Position.x)
+  const py = arch.field(Position.y)
+  for (let i = 0; i < arch.count; i++) {
+    px[i] += Math.random() - 0.5
+    py[i] += Math.random() - 0.5
+  }
+})
 ```
 
 ---
@@ -123,11 +126,13 @@ Three ways to work with entities. Pick the right one for the job:
 The primary way to update fields every frame. Required components are inferred from the expression — no query needed. Runs 4x faster than a manual JS loop when WASM SIMD is available.
 
 ```ts
-import { add, sub, scale } from 'archetype-ecs'
+import { add, sub, scale, random } from 'archetype-ecs'
 
-em.apply(Position.x, add(Position.x, Velocity.vx))   // px += vx
-em.apply(Position.y, add(Position.y, Velocity.vy))   // py += vy
-em.apply(Velocity.vx, scale(Velocity.vx, 0.99))      // friction
+em.apply(Position.x, add(Position.x, Velocity.vx))     // px += vx
+em.apply(Position.y, add(Position.y, Velocity.vy))     // py += vy
+em.apply(Velocity.vx, scale(Velocity.vx, 0.99))        // friction
+em.apply(Position.x, add(Position.x, random(-1, 1)))   // px += random(-1, 1)
+em.apply(Position.x, random(0, 800))                   // scatter to random positions
 ```
 
 #### `forEach` — custom operations
@@ -235,11 +240,15 @@ Supports stripping components, skipping entities, and custom serializers.
 `em.apply` runs SIMD-accelerated bulk math — no loops, no raw arrays. Available expressions:
 
 ```ts
-add(a, b)        // a[i] + b[i]
-sub(a, b)        // a[i] - b[i]
-mul(a, b)        // a[i] * b[i]
-scale(a, s)      // a[i] * s
+add(a, b)              // a[i] + b[i]
+sub(a, b)              // a[i] - b[i]
+mul(a, b)              // a[i] * b[i]
+scale(a, s)            // a[i] * s
+random(min, max)       // fill with random values in [min, max]
+add(a, random(min, max))  // a[i] + random value in [min, max]
 ```
+
+`random()` uses a vectorized LCG (Linear Congruential Generator) in the WASM module — 4 random floats per SIMD instruction, fully independent of `Math.random()`. `b` in `add`/`sub`/`mul` can be either a field reference or a `random()` expression.
 
 When WASM SIMD is available and the fields are `f32`, this runs 4x faster than a manual JS loop. Otherwise it falls back to scalar JS automatically. For operations that can't be expressed as simple math, use [`forEach`](#forEach--custom-operations).
 
@@ -247,7 +256,7 @@ When WASM SIMD is available and the fields are `f32`, this runs 4x faster than a
 
 | Condition | Check | Fallback |
 |---|---|---|
-| Runtime supports WASM SIMD | Tested once at startup by compiling a 925-byte SIMD module | All operations use scalar JS |
+| Runtime supports WASM SIMD | Tested once at startup by compiling a 1475-byte SIMD module | All operations use scalar JS |
 | WASM mode not disabled | `createEntityManager()` (default) or `{ wasm: true }` | `createEntityManager({ wasm: false })` forces JS-only |
 | Field type is `f32` | `apply` checks if arrays are `Float32Array` | Scalar JS loop |
 

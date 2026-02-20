@@ -1,7 +1,7 @@
 import { describe, it, beforeEach } from 'node:test';
 import assert from 'node:assert/strict';
 import { createEntityManager, type EntityManager } from '../src/EntityManager.js';
-import { component, type ComponentDef } from '../src/index.js';
+import { component, add, sub, mul, scale, random, type ComponentDef } from '../src/index.js';
 
 describe('EntityManager', () => {
   let em: EntityManager;
@@ -753,5 +753,148 @@ describe('Deferred Hooks (onAdd / onRemove)', () => {
 
     em.flushHooks();
     assert.deepEqual(added, [a]);
+  });
+});
+
+describe('apply()', () => {
+  const Pos = component('ApplyPos', 'f32', ['x', 'y']);
+  let em: EntityManager;
+
+  beforeEach(() => {
+    em = createEntityManager();
+    for (let i = 0; i < 20; i++) {
+      em.createEntityWith(Pos, { x: i * 1.0, y: i * 2.0 });
+    }
+  });
+
+  it('add(a, b) adds two fields element-wise', () => {
+    const Vel = component('ApplyVel', 'f32', ['vx', 'vy']);
+    const em2 = createEntityManager();
+    em2.createEntityWith(Pos, { x: 10, y: 20 });
+    em2.createEntityWith(Vel, { vx: 1, vy: 2 });
+    const id = em2.createEntity();
+    em2.addComponent(id, Pos, { x: 5, y: 6 });
+    em2.addComponent(id, Vel, { vx: 3, vy: 4 });
+
+    em2.apply(Pos.x, add(Pos.x, Vel.vx));
+
+    // Only the entity with both Pos and Vel is affected
+    assert.equal(em2.get(id, Pos.x), 8);  // 5 + 3
+    assert.equal(em2.get(id, Pos.y), 6);  // unchanged (applied to x only)
+  });
+
+  it('sub(a, b) subtracts two fields element-wise', () => {
+    const A = component('SubA', 'f32', ['v']);
+    const B = component('SubB', 'f32', ['v']);
+    const em2 = createEntityManager();
+    const id = em2.createEntity();
+    em2.addComponent(id, A, { v: 10 });
+    em2.addComponent(id, B, { v: 3 });
+
+    em2.apply(A.v, sub(A.v, B.v));
+    assert.equal(em2.get(id, A.v), 7);
+  });
+
+  it('mul(a, b) multiplies two fields element-wise', () => {
+    const A = component('MulA', 'f32', ['v']);
+    const B = component('MulB', 'f32', ['v']);
+    const em2 = createEntityManager();
+    const id = em2.createEntity();
+    em2.addComponent(id, A, { v: 6 });
+    em2.addComponent(id, B, { v: 4 });
+
+    em2.apply(A.v, mul(A.v, B.v));
+    assert.equal(em2.get(id, A.v), 24);
+  });
+
+  it('scale(a, s) multiplies field by a scalar', () => {
+    const em2 = createEntityManager();
+    const id = em2.createEntity();
+    em2.addComponent(id, Pos, { x: 5, y: 10 });
+
+    em2.apply(Pos.x, scale(Pos.x, 3));
+    assert.equal(em2.get(id, Pos.x), 15);
+    assert.equal(em2.get(id, Pos.y), 10); // unchanged
+  });
+
+  it('random() fills field with values in [min, max]', () => {
+    em.apply(Pos.x, random(5, 15));
+
+    em.forEach([Pos], (arch) => {
+      const px = arch.field(Pos.x) as Float32Array;
+      for (let i = 0; i < arch.count; i++) {
+        assert.ok(px[i] >= 5, `px[${i}]=${px[i]} should be >= 5`);
+        assert.ok(px[i] <= 15, `px[${i}]=${px[i]} should be <= 15`);
+      }
+    });
+  });
+
+  it('random() produces different values across elements', () => {
+    em.apply(Pos.x, random(0, 100));
+
+    const vals: number[] = [];
+    em.forEach([Pos], (arch) => {
+      const px = arch.field(Pos.x) as Float32Array;
+      for (let i = 0; i < arch.count; i++) vals.push(px[i]);
+    });
+    // With 20 entities and range [0,100] the values should not all be identical
+    const allSame = vals.every(v => v === vals[0]);
+    assert.ok(!allSame, 'random() should produce varying values');
+  });
+
+  it('add(a, random(min, max)) shifts each element by a random amount', () => {
+    // Record original values
+    const before: number[] = [];
+    em.forEach([Pos], (arch) => {
+      const px = arch.field(Pos.x) as Float32Array;
+      for (let i = 0; i < arch.count; i++) before.push(px[i]);
+    });
+
+    em.apply(Pos.x, add(Pos.x, random(-1, 1)));
+
+    let idx = 0;
+    em.forEach([Pos], (arch) => {
+      const px = arch.field(Pos.x) as Float32Array;
+      for (let i = 0; i < arch.count; i++) {
+        const delta = px[i] - before[idx++];
+        assert.ok(delta >= -1 - 1e-5, `delta ${delta} should be >= -1`);
+        assert.ok(delta <=  1 + 1e-5, `delta ${delta} should be <= 1`);
+      }
+    });
+  });
+
+  it('sub(a, random(min, max)) shifts each element by a negative random amount', () => {
+    const before: number[] = [];
+    em.forEach([Pos], (arch) => {
+      const px = arch.field(Pos.x) as Float32Array;
+      for (let i = 0; i < arch.count; i++) before.push(px[i]);
+    });
+
+    em.apply(Pos.x, sub(Pos.x, random(0, 2)));
+
+    let idx = 0;
+    em.forEach([Pos], (arch) => {
+      const px = arch.field(Pos.x) as Float32Array;
+      for (let i = 0; i < arch.count; i++) {
+        const delta = before[idx++] - px[i]; // original - result = the subtracted amount
+        assert.ok(delta >= -1e-5, `delta ${delta} should be >= 0`);
+        assert.ok(delta <= 2 + 1e-5, `delta ${delta} should be <= 2`);
+      }
+    });
+  });
+
+  it('apply skips archetypes missing target component', () => {
+    const Other = component('ApplyOther', 'f32', ['v']);
+    const em2 = createEntityManager();
+    em2.createEntityWith(Pos, { x: 7, y: 7 });
+    em2.createEntityWith(Other, { v: 99 });
+
+    // Should not throw; Other archetype has no Pos.x
+    em2.apply(Pos.x, scale(Pos.x, 2));
+
+    em2.forEach([Pos], (arch) => {
+      const px = arch.field(Pos.x) as Float32Array;
+      assert.equal(px[0], 14);
+    });
   });
 });

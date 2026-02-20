@@ -11,16 +11,21 @@ export type SoAArrayValue = Float32Array | Float64Array | Int8Array | Int16Array
 
 // ── Field expressions ─────────────────────────────────────
 
-export type FieldExpr =
-  | { _op: 'add'; a: FieldRef; b: FieldRef }
-  | { _op: 'sub'; a: FieldRef; b: FieldRef }
-  | { _op: 'mul'; a: FieldRef; b: FieldRef }
-  | { _op: 'scale'; a: FieldRef; s: number };
+export type RandomExpr = { _op: 'random'; min: number; max: number };
+export type Operand = FieldRef | RandomExpr;
 
-export function add(a: FieldRef, b: FieldRef): FieldExpr { return { _op: 'add', a, b }; }
-export function sub(a: FieldRef, b: FieldRef): FieldExpr { return { _op: 'sub', a, b }; }
-export function mul(a: FieldRef, b: FieldRef): FieldExpr { return { _op: 'mul', a, b }; }
+export type FieldExpr =
+  | { _op: 'add'; a: FieldRef; b: Operand }
+  | { _op: 'sub'; a: FieldRef; b: Operand }
+  | { _op: 'mul'; a: FieldRef; b: Operand }
+  | { _op: 'scale'; a: FieldRef; s: number }
+  | RandomExpr;
+
+export function add(a: FieldRef, b: Operand): FieldExpr { return { _op: 'add', a, b }; }
+export function sub(a: FieldRef, b: Operand): FieldExpr { return { _op: 'sub', a, b }; }
+export function mul(a: FieldRef, b: Operand): FieldExpr { return { _op: 'mul', a, b }; }
 export function scale(a: FieldRef, s: number): FieldExpr { return { _op: 'scale', a, s }; }
+export function random(min: number, max: number): RandomExpr { return { _op: 'random', min, max }; }
 
 export interface ArchetypeView {
   readonly id: number;
@@ -326,6 +331,14 @@ export function createEntityManager(options?: { wasm?: boolean }): EntityManager
   const useWasm = options?.wasm ?? isWasmSimdAvailable();
   const arena = useWasm ? new WasmArena() : undefined;
   const kernels: IterateKernels | null = arena ? instantiateKernelsSync(arena.memory) : null;
+
+  // Allocate and seed 16-byte PRNG state for LCG random kernels (4x i32, one per SIMD lane)
+  let prngStateOffset = 0;
+  if (arena) {
+    prngStateOffset = arena.alloc(16);
+    const seed = new Uint32Array(arena.memory.buffer, prngStateOffset, 4);
+    for (let k = 0; k < 4; k++) seed[k] = ((Math.random() * 0xFFFFFFFF) >>> 0) || 1;
+  }
 
   let nextId: EntityId = 1;
   let nextArchId = 1;
@@ -797,10 +810,10 @@ export function createEntityManager(options?: { wasm?: boolean }): EntityManager
     },
 
     apply(target: FieldRef, expr: FieldExpr): void {
-      // Collect required component symbols from the expression
+      // Collect required component symbols — RandomExpr operands have no _sym
       const syms = new Set<symbol>([target._sym]);
       if ('a' in expr) syms.add(expr.a._sym);
-      if ('b' in expr) syms.add(expr.b._sym);
+      if ('b' in expr && '_sym' in expr.b) syms.add((expr.b as FieldRef)._sym);
 
       // Find matching archetypes
       const types = [...syms].map(s => ({ _sym: s }) as ComponentDef);
@@ -816,13 +829,21 @@ export function createEntityManager(options?: { wasm?: boolean }): EntityManager
         const stride = tStore._arraySizes[target._field] || 1;
         const n = arch.count * stride;
 
-        if (expr._op === 'scale') {
+        if (expr._op === 'random') {
+          // Standalone: dst[i] = min + rand * range
+          const range = expr.max - expr.min;
+          if (kernels && dst instanceof Float32Array) {
+            kernels.random_f32(dst.byteOffset, prngStateOffset, expr.min, range, n);
+          } else {
+            const min = expr.min;
+            for (let i = 0; i < n; i++) (dst as unknown as number[])[i] = min + Math.random() * range;
+          }
+        } else if (expr._op === 'scale') {
           if (kernels && dst instanceof Float32Array) {
             const aStore = arch.components.get(expr.a._sym);
             if (!aStore) continue;
             const src = aStore._fields[expr.a._field];
             if (src instanceof Float32Array) {
-              // If target !== source, copy first
               if (dst !== src) dst.set(src.subarray(0, n));
               kernels.scale_f32(dst.byteOffset, expr.s, n);
             } else {
@@ -835,23 +856,41 @@ export function createEntityManager(options?: { wasm?: boolean }): EntityManager
             for (let i = 0; i < n; i++) (dst as unknown as number[])[i] = ((src as unknown as number[])[i] * expr.s);
           }
         } else {
+          // add / sub / mul — b is either FieldRef or RandomExpr
           const aStore = arch.components.get(expr.a._sym);
-          const bStore = arch.components.get(expr.b._sym);
-          if (!aStore || !bStore) continue;
+          if (!aStore) continue;
           const srcA = aStore._fields[expr.a._field];
-          const srcB = bStore._fields[expr.b._field];
 
-          if (kernels && dst instanceof Float32Array && srcA instanceof Float32Array && srcB instanceof Float32Array) {
-            // If target !== srcA, copy srcA into target first
-            if (dst !== srcA) dst.set(srcA.subarray(0, n));
-            if (expr._op === 'add') kernels.add_f32(dst.byteOffset, srcB.byteOffset, n);
-            else if (expr._op === 'sub') kernels.sub_f32(dst.byteOffset, srcB.byteOffset, n);
-            else kernels.mul_f32(dst.byteOffset, srcB.byteOffset, n);
+          if ('_op' in expr.b) {
+            // b is RandomExpr: dst[i] = op(srcA[i], rand)
+            const rnd = expr.b as RandomExpr;
+            const range = rnd.max - rnd.min;
+            if (expr._op === 'add' && kernels && dst instanceof Float32Array && srcA instanceof Float32Array) {
+              kernels.add_random_f32(dst.byteOffset, srcA.byteOffset, prngStateOffset, rnd.min, range, n);
+            } else {
+              const min = rnd.min;
+              const op = expr._op === 'add' ? (av: number, r: number) => av + r
+                       : expr._op === 'sub' ? (av: number, r: number) => av - r
+                       : (av: number, r: number) => av * r;
+              for (let i = 0; i < n; i++) (dst as unknown as number[])[i] = op((srcA as unknown as number[])[i], min + Math.random() * range);
+            }
           } else {
-            const op = expr._op === 'add' ? (a: number, b: number) => a + b
-                     : expr._op === 'sub' ? (a: number, b: number) => a - b
-                     : (a: number, b: number) => a * b;
-            for (let i = 0; i < n; i++) (dst as unknown as number[])[i] = op((srcA as unknown as number[])[i], (srcB as unknown as number[])[i]);
+            // b is FieldRef — existing SIMD path
+            const bStore = arch.components.get((expr.b as FieldRef)._sym);
+            if (!bStore) continue;
+            const srcB = bStore._fields[(expr.b as FieldRef)._field];
+
+            if (kernels && dst instanceof Float32Array && srcA instanceof Float32Array && srcB instanceof Float32Array) {
+              if (dst !== srcA) dst.set(srcA.subarray(0, n));
+              if (expr._op === 'add') kernels.add_f32(dst.byteOffset, srcB.byteOffset, n);
+              else if (expr._op === 'sub') kernels.sub_f32(dst.byteOffset, srcB.byteOffset, n);
+              else kernels.mul_f32(dst.byteOffset, srcB.byteOffset, n);
+            } else {
+              const op = expr._op === 'add' ? (av: number, b: number) => av + b
+                       : expr._op === 'sub' ? (av: number, b: number) => av - b
+                       : (av: number, b: number) => av * b;
+              for (let i = 0; i < n; i++) (dst as unknown as number[])[i] = op((srcA as unknown as number[])[i], (srcB as unknown as number[])[i]);
+            }
           }
         }
       }
