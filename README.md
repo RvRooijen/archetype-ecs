@@ -32,7 +32,7 @@ for (let i = 0; i < 10_000; i++) {
   em.createEntityWith(Position, { x: Math.random() * 800, y: Math.random() * 600 })
 }
 
-// ~0.3 ms base + ~0.3 ms random, 1M entities each
+// ~0.3 ms base + ~0.3 ms random per call / 1M entities
 em.apply(Position.x, add(Position.x, random(-0.5, 0.5)))
 em.apply(Position.y, add(Position.y, random(-0.5, 0.5)))
 ```
@@ -128,7 +128,7 @@ The primary way to update fields every frame. Required components are inferred f
 ```ts
 import { add, sub, scale, random } from 'archetype-ecs'
 
-// ~0.3 ms / 1M entities each
+// ~0.3 ms per call / 1M entities
 em.apply(Position.x, add(Position.x, Velocity.vx))
 em.apply(Position.y, add(Position.y, Velocity.vy))
 // friction
