@@ -119,38 +119,32 @@ em.getComponent(player, Name)
 
 ### Iteration — `apply`, `forEach`, and `query`
 
-Three ways to work with entities. Pick the right one for the job:
+Three ways to work with entities. Pick the right one for the job. All examples below use the same components:
+
+```ts
+const Position = component('Position', 'f32', ['x', 'y'])
+const Velocity = component('Velocity', 'f32', ['vx', 'vy'])
+const Health   = component('Health', { hp: 'i32' })
+const Enemy    = component('Enemy')
+const Dead     = component('Dead')
+```
 
 #### `apply` — bulk math, SIMD-accelerated
 
-The primary way to update fields every frame. Required components are inferred from the expression — no query needed.
+The primary way to update fields every frame. Required components are inferred from the expression. An optional `filter` restricts which archetypes are processed — archetype matching is cached, so the filter adds no per-frame overhead after the first call.
 
 ```ts
-import { add, sub, scale, random } from 'archetype-ecs'
+import { add, scale } from 'archetype-ecs'
 
+// move allies only — skip enemies
 // ~0.3 ms per call / 1M entities
-em.apply(Position.x, add(Position.x, Velocity.vx))
-em.apply(Position.y, add(Position.y, Velocity.vy))
-// friction
+em.apply(Position.x, add(Position.x, Velocity.vx), { without: [Enemy] })
+em.apply(Position.y, add(Position.y, Velocity.vy), { without: [Enemy] })
+
+// apply friction to everyone
 em.apply(Velocity.vx, scale(Velocity.vx, 0.99))
-// shift each entity by a random amount
-em.apply(Position.x, add(Position.x, random(-1, 1)))
-// scatter to random positions
-em.apply(Position.x, random(0, 800))
+em.apply(Velocity.vy, scale(Velocity.vy, 0.99))
 ```
-
-An optional `filter` restricts which archetypes are processed — the same `with` / `without` semantics as `forEach` and `query`:
-
-```ts
-// only move entities that also have Velocity (without: skip frozen ones)
-em.apply(Position.x, add(Position.x, Velocity.vx), { without: [Frozen] })
-em.apply(Position.y, add(Position.y, Velocity.vy), { without: [Frozen] })
-
-// combine with / without
-em.apply(Position.x, add(Position.x, Velocity.vx), { with: [Active], without: [Frozen] })
-```
-
-Archetype matching for filtered calls is cached — the filter adds no per-frame overhead after the first call.
 
 #### `forEach` — batch processing with TypedArray access
 
@@ -160,12 +154,12 @@ For per-entity logic that needs both raw field data and entity IDs. You get the 
 // mark entities with no health as dead — needs entity IDs + conditional branch
 // ~2.8 ms / 1M entities (JS loop)
 em.forEach([Health], (arch) => {
-  const hp = arch.field(Health.hp)
+  const hp  = arch.field(Health.hp)
   const ids = arch.entityIds
   for (let i = 0; i < arch.count; i++) {
     if (hp[i] <= 0) em.addComponent(ids[i], Dead)
   }
-})
+}, [Dead]) // skip already-dead entities
 ```
 
 #### `query` — cross-entity lookups, excludes, counting
@@ -173,9 +167,9 @@ em.forEach([Health], (arch) => {
 Returns a flat list of entity IDs. Use when you need to relate entities to each other, filter with excludes, or just count matches.
 
 ```ts
-// Find the closest enemy to the player
+// find the closest live enemy to the player
 // allocates number[] — ~21 ms / 1M entities
-const enemies = em.query([Position, Enemy])
+const enemies = em.query([Position, Enemy], [Dead])
 let closest = -1, minDist = Infinity
 for (const id of enemies) {
   const dx = em.get(id, Position.x) - playerX
@@ -184,14 +178,11 @@ for (const id of enemies) {
   if (dist < minDist) { minDist = dist; closest = id }
 }
 
-// Store the result as a component
+// store the result as a component
 em.addComponent(player, Target, { entityId: closest })
 
-// Exclude enemies from friendly queries
-const friendly = em.query([Health], [Enemy])
-
-// Just need a count? ~0.001 ms / 1M entities, no allocation
-const total = em.count([Position])
+// just need a count? ~0.001 ms / 1M entities, no allocation
+const aliveEnemies = em.count([Enemy], [Dead])
 ```
 
 #### When to use which
