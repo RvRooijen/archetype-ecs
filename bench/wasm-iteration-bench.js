@@ -133,6 +133,42 @@ function benchECSApply() {
   return (performance.now() - t0) / FRAMES;
 }
 
+// ── Benchmark 4: em.apply with filter (half entities excluded) ───────────────
+// 500K entities have [Position, Velocity], 500K have [Position, Velocity, Frozen].
+// apply({ without: [Frozen] }) processes only the 500K active entities.
+// Demonstrates that filter overhead is negligible (cached archetype lookup)
+// and that processing fewer entities reduces time proportionally.
+
+function benchECSApplyFiltered() {
+  const Position = component('FPos', { x: 'f32', y: 'f32' });
+  const Velocity = component('FVel', { vx: 'f32', vy: 'f32' });
+  const Frozen   = component('FFrozen');
+  const em = createEntityManager({ wasm: true });
+
+  const half = COUNT / 2;
+  for (let i = 0; i < half; i++) {
+    em.createEntityWith(Position, { x: i * 0.1, y: i * 0.1 }, Velocity, { vx: 1, vy: 1 });
+  }
+  for (let i = 0; i < half; i++) {
+    const id = em.createEntity();
+    em.addComponent(id, Position, { x: i * 0.1, y: i * 0.1 });
+    em.addComponent(id, Velocity, { vx: 1, vy: 1 });
+    em.addComponent(id, Frozen);
+  }
+
+  for (let f = 0; f < WARMUP; f++) {
+    em.apply(Position.x, add(Position.x, Velocity.vx), { without: [Frozen] });
+    em.apply(Position.y, add(Position.y, Velocity.vy), { without: [Frozen] });
+  }
+
+  const t0 = performance.now();
+  for (let f = 0; f < FRAMES; f++) {
+    em.apply(Position.x, add(Position.x, Velocity.vx), { without: [Frozen] });
+    em.apply(Position.y, add(Position.y, Velocity.vy), { without: [Frozen] });
+  }
+  return (performance.now() - t0) / FRAMES;
+}
+
 // ── Output ───────────────────────────────────────────────────────────────────
 
 function printTable(title, results, baselineName) {
@@ -177,7 +213,7 @@ async function main() {
 
   // 1. ECS forEach (default JS storage)
   {
-    console.log('  [1/3] ECS forEach (JS storage, baseline)');
+    console.log('  [1/4] ECS forEach (JS storage, baseline)');
     const times = [];
     for (let r = 0; r < RUNS; r++) {
       process.stdout.write(`        Run ${r + 1}/${RUNS}...`);
@@ -190,7 +226,7 @@ async function main() {
 
   // 2. ECS forEach (WASM-backed storage, JS iteration)
   {
-    console.log('  [2/3] ECS forEach (WASM storage, JS iter)');
+    console.log('  [2/4] ECS forEach (WASM storage, JS iter)');
     const times = [];
     for (let r = 0; r < RUNS; r++) {
       process.stdout.write(`        Run ${r + 1}/${RUNS}...`);
@@ -203,7 +239,7 @@ async function main() {
 
   // 3. em.apply (auto SIMD dispatch)
   {
-    console.log('  [3/3] em.apply (auto SIMD)');
+    console.log('  [3/4] em.apply (auto SIMD)');
     const times = [];
     for (let r = 0; r < RUNS; r++) {
       process.stdout.write(`        Run ${r + 1}/${RUNS}...`);
@@ -212,6 +248,19 @@ async function main() {
       console.log(` ${ms.toFixed(3)} ms/frame`);
     }
     results.push({ name: 'em.apply (auto SIMD)', value: median(times) });
+  }
+
+  // 4. em.apply with filter (500K active, 500K frozen)
+  {
+    console.log('  [4/4] em.apply (filter: without Frozen, 500K entities)');
+    const times = [];
+    for (let r = 0; r < RUNS; r++) {
+      process.stdout.write(`        Run ${r + 1}/${RUNS}...`);
+      const ms = benchECSApplyFiltered();
+      times.push(ms);
+      console.log(` ${ms.toFixed(3)} ms/frame`);
+    }
+    results.push({ name: 'em.apply (filtered, 500K)', value: median(times) });
   }
 
   printTable(
