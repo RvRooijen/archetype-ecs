@@ -22,7 +22,7 @@ npm i archetype-ecs
 Create some entities and move them each frame:
 
 ```ts
-import { createEntityManager, component } from 'archetype-ecs'
+import { createEntityManager, component, add, random } from 'archetype-ecs'
 
 const Position = component('Position', 'f32', ['x', 'y'])
 
@@ -32,6 +32,7 @@ for (let i = 0; i < 10_000; i++) {
   em.createEntityWith(Position, { x: Math.random() * 800, y: Math.random() * 600 })
 }
 
+// custom logic — 1M entities: ~11 ms/frame
 em.forEach([Position], (arch) => {
   const px = arch.field(Position.x)
   const py = arch.field(Position.y)
@@ -40,6 +41,10 @@ em.forEach([Position], (arch) => {
     py[i] += Math.random() - 0.5
   }
 })
+
+// SIMD-accelerated — 1M entities: ~0.6 ms/frame
+em.apply(Position.x, add(Position.x, random(-0.5, 0.5)))
+em.apply(Position.y, add(Position.y, random(-0.5, 0.5)))
 ```
 
 ---
