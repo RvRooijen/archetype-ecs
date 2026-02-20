@@ -199,7 +199,7 @@ describe('System (class + decorators)', () => {
 
     class TestSys extends System {
       tick() {
-        this.forEach([Position, Velocity], (view) => { count += view.count; });
+        this.forEach([Position, Velocity], () => { count++; });
       }
     }
 
@@ -463,7 +463,7 @@ describe('createSystems', () => {
 
     class TickSys extends System {
       tick() {
-        this.forEach([Position, Velocity], (view) => { moved += view.count; });
+        this.forEach([Position, Velocity], () => { moved++; });
       }
     }
 

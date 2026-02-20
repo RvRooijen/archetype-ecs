@@ -146,19 +146,14 @@ em.apply(Velocity.vx, scale(Velocity.vx, 0.99))
 em.apply(Velocity.vy, scale(Velocity.vy, 0.99))
 ```
 
-#### `forEach` — batch processing with TypedArray access
+#### `forEach` — per-entity iteration
 
-For per-entity logic that needs both raw field data and entity IDs. You get the backing TypedArrays and entity ID list together, archetype by archetype.
+For per-entity logic with conditional branches or structural changes.
 
 ```ts
-// mark entities with no health as dead — needs entity IDs + conditional branch
-// ~2.8 ms / 1M entities (JS loop)
-em.forEach([Health], (arch) => {
-  const hp  = arch.field(Health.hp)
-  const ids = arch.entityIds
-  for (let i = 0; i < arch.count; i++) {
-    if (hp[i] <= 0) em.addComponent(ids[i], Dead)
-  }
+// mark entities with no health as dead
+em.forEach([Health], (id) => {
+  if ((em.get(id, Health.hp) as number) <= 0) em.addComponent(id, Dead)
 }, [Dead]) // skip already-dead entities
 ```
 
@@ -192,7 +187,7 @@ const aliveEnemies = em.count([Enemy], [Dead])
 | **Use for** | Bulk math, no branching | Conditionals, structural changes | Cross-entity lookups, excludes, counting |
 | **Runs** | Every frame | Every frame | On demand |
 | **Allocates** | Nothing | Nothing | `number[]` of entity IDs |
-| **Access** | Declarative expressions | TypedArrays + entity IDs per archetype | `get` / `set` by entity ID |
+| **Access** | Declarative expressions | `get` / `set` per entity | `get` / `set` by entity ID |
 | **Filtering** | `{ with?, without? }` optional filter | `exclude?` array | `exclude?` array |
 
 ### Systems
@@ -334,9 +329,6 @@ Position.z
 em.get(id, Position.x)
 // zero-alloc field write
 em.set(id, Position.x, 5)
-
-// Float32Array — direct TypedArray access
-arch.field(Position.x)
 ```
 
 ---
@@ -382,20 +374,12 @@ Returns an entity manager. WASM SIMD is auto-detected and enabled by default. Pa
 | `query(include, exclude?)` | Get matching entity IDs |
 | `count(include, exclude?)` | Count matching entities |
 | `apply(target, expr, filter?)` | Set a field to an expression result — SIMD-accelerated for `f32`. Optional `{ with?, without? }` restricts which archetypes are processed. |
-| `forEach(include, callback, exclude?)` | Iterate archetypes with TypedArray access |
+| `forEach(include, callback, exclude?)` | Iterate matching entities — callback receives `EntityId` |
 | `onAdd(Comp, callback)` | Register callback for component additions *(deferred)* |
 | `onRemove(Comp, callback)` | Register callback for component removals *(deferred)* |
 | `flushHooks()` | Collect pending add/remove events for registered hooks |
 | `serialize(symbolToName, strip?, skip?, opts?)` | Serialize world to JSON-friendly object |
 | `deserialize(data, nameToSymbol, opts?)` | Restore world from serialized data |
-
-The `forEach` callback receives an `ArchetypeView` with:
-
-| Method | Description |
-|---|---|
-| `field(ref)` | Get the backing TypedArray for a field |
-| `fieldStride(ref)` | Elements per entity (1 for scalars, N for arrays) |
-| `snapshot(ref)` | Get the snapshot TypedArray (change tracking) |
 
 ### `System`
 
@@ -423,7 +407,6 @@ Creates a pipeline from an array of `System` subclasses. Returns a callable that
 | | archetype-ecs | [bitecs](https://github.com/NateTheGreatt/bitECS) | [wolf-ecs](https://github.com/EnderShadow8/wolf-ecs) | [harmony-ecs](https://github.com/3mcd/harmony-ecs) | [miniplex](https://github.com/hmans/miniplex) |
 |---|---:|---:|---:|---:|---:|
 | **Iteration** — `apply()` (ms/frame) | **0.29** | 1.6 | 1.4 | 1.1 | 28.9 |
-| **Iteration** — `field()` + loop (ms/frame) | 1.2 | — | — | — | — |
 | **Entity creation** (ms) | 501 | 359 | **105** | 255 | 157 |
 | **Memory** (MB) | 86+128 | 204 | 60 | **31** | 166 |
 
@@ -434,11 +417,10 @@ Each library iterates 1M entities over 500 frames (`Position += Velocity`):
 em.apply(Position.x, add(Position.x, Velocity.vx))
 em.apply(Position.y, add(Position.y, Velocity.vy))
 
-// forEach + field() — manual loop for custom operations
-em.forEach([Position, Velocity], (arch) => {
-  const vy = arch.field(Velocity.vy)
-  for (let i = 0; i < arch.count; i++)
-    vy[i] = Math.max(vy[i] - 9.81 * dt, -50)
+// forEach — per-entity logic with conditional branches
+em.forEach([Position, Velocity], (id) => {
+  const vy = em.get(id, Velocity.vy) as number
+  em.set(id, Velocity.vy, Math.max(vy - 9.81 * dt, -50))
 })
 ```
 
@@ -462,7 +444,6 @@ Compared against other JS ECS libraries:
 | WASM SIMD iteration (auto-detected) | ✓ | — | — | — | — |
 | String SoA storage | ✓ | — | — | — | — |
 | Mixed string + numeric components | ✓ | — | — | — | — |
-| `forEach` with dense TypedArray field access | ✓ | — | — | — | — |
 | Field descriptors for both per-entity and bulk access | ✓ | — | — | — | — |
 | TC39 decorator system (`@OnAdded` / `@OnRemoved`) | ✓ | — | — | — | — |
 | Built-in profiler | ✓ | — | — | — | — |

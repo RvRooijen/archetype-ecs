@@ -36,11 +36,10 @@ const pos = em.getComponent(id, Position);
 const px = em.get(id, Position.x);
 em.set(id, Position.x, 10);
 
-// forEach + field: accepts FieldRef
-em.forEach([Position, Velocity], (arch) => {
-  const count: number = arch.count;
-  const ids: EntityId[] = arch.entityIds;
-  const arrX = arch.field(Position.x);
+// forEach: callback receives EntityId
+em.forEach([Position, Velocity], (eid) => {
+  const _id: EntityId = eid;
+  em.get(eid, Position.x);
 });
 
 // createEntityWith: alternating type, data
@@ -55,8 +54,8 @@ class TestSystem extends System {
   handleRemove(id: EntityId) {}
 
   tick() {
-    this.forEach([Position], (view) => {
-      const count: number = view.count;
+    this.forEach([Position], (eid) => {
+      const _id: EntityId = eid;
     });
   }
 }

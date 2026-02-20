@@ -1,5 +1,5 @@
 export { createEntityManager, add, sub, mul, scale, random } from './EntityManager.js';
-export type { EntityId, ArchetypeView, EntityManager, SerializedData, FieldExpr, RandomExpr, Operand } from './EntityManager.js';
+export type { EntityId, EntityManager, SerializedData, FieldExpr, RandomExpr, Operand } from './EntityManager.js';
 export { createSystems, System, OnAdded, OnRemoved } from './System.js';
 export type { Pipeline } from './System.js';
 export { profiler } from './Profiler.js';

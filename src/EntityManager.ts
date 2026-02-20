@@ -27,16 +27,6 @@ export function mul(a: FieldRef, b: Operand): FieldExpr { return { _op: 'mul', a
 export function scale(a: FieldRef, s: number): FieldExpr { return { _op: 'scale', a, s }; }
 export function random(min: number, max: number): RandomExpr { return { _op: 'random', min, max }; }
 
-export interface ArchetypeView {
-  readonly id: number;
-  readonly entityIds: EntityId[];
-  readonly count: number;
-  readonly snapshotEntityIds: EntityId[] | null;
-  readonly snapshotCount: number;
-  field(ref: FieldRef): any;
-  fieldStride(ref: FieldRef): number;
-  snapshot(ref: FieldRef): any;
-}
 
 export interface SerializedData {
   nextId: number;
@@ -59,7 +49,7 @@ export interface EntityManager {
   getAllEntities(): EntityId[];
   createEntityWith(...args: unknown[]): EntityId;
   count(include: ComponentDef[], exclude?: ComponentDef[]): number;
-  forEach(include: ComponentDef[], callback: (view: ArchetypeView) => void, exclude?: ComponentDef[]): void;
+  forEach(include: ComponentDef[], callback: (id: EntityId) => void, exclude?: ComponentDef[]): void;
   apply(target: FieldRef, expr: FieldExpr, filter?: { with?: ComponentDef[], without?: ComponentDef[] }): void;
   onAdd(type: ComponentDef, callback: (entityId: EntityId) => void): () => void;
   onRemove(type: ComponentDef, callback: (entityId: EntityId) => void): () => void;
@@ -768,38 +758,16 @@ export function createEntityManager(options?: { wasm?: boolean }): EntityManager
       return total;
     },
 
-    forEach(includeTypes: ComponentDef[], callback: (view: ArchetypeView) => void, excludeTypes?: ComponentDef[]): void {
+    forEach(includeTypes: ComponentDef[], callback: (id: EntityId) => void, excludeTypes?: ComponentDef[]): void {
       const matching = getMatchingArchetypes(includeTypes, excludeTypes);
       iterating++;
       try {
         for (let a = 0; a < matching.length; a++) {
           const arch = matching[a];
-          if (arch.count === 0) continue;
-          const snaps = arch.snapshots;
-          const view: ArchetypeView = {
-            id: arch.id,
-            entityIds: arch.entityIds,
-            count: arch.count,
-            snapshotEntityIds: arch.snapshotEntityIds,
-            snapshotCount: arch.snapshotCount,
-            field(ref: FieldRef) {
-              const store = arch.components.get(ref._sym);
-              if (!store) return undefined;
-              return store._fields[ref._field];
-            },
-            fieldStride(ref: FieldRef) {
-              const store = arch.components.get(ref._sym);
-              if (!store) return 1;
-              return store._arraySizes[ref._field] || 1;
-            },
-            snapshot(ref: FieldRef) {
-              if (!snaps) return undefined;
-              const snap = snaps.get(ref._sym);
-              if (!snap) return undefined;
-              return snap[ref._field];
-            }
-          };
-          callback(view);
+          const ids = arch.entityIds;
+          for (let i = 0; i < arch.count; i++) {
+            callback(ids[i]);
+          }
         }
       } finally {
         iterating--;

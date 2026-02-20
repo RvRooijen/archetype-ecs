@@ -1,5 +1,5 @@
 import type { ComponentDef } from './ComponentRegistry.js';
-import type { EntityId, EntityManager, ArchetypeView } from './EntityManager.js';
+import type { EntityId, EntityManager } from './EntityManager.js';
 
 // ── Decorators (TC39 Stage 3) ────────────────────────────
 
@@ -60,7 +60,7 @@ export class System {
     this._hooks.push({ buffer, handler });
   }
 
-  forEach(types: ComponentDef[], callback: (view: ArchetypeView) => void, exclude?: ComponentDef[]): void {
+  forEach(types: ComponentDef[], callback: (id: EntityId) => void, exclude?: ComponentDef[]): void {
     this.em.forEach(types, callback, exclude);
   }
 

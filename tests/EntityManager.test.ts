@@ -299,15 +299,9 @@ describe('Typed Components (SoA)', () => {
       em.addComponent(id, Vel, { vx: 1, vy: 2 });
     }
 
-    em.forEach([Pos, Vel], (arch) => {
-      const px = arch.field(Pos.x) as Float32Array;
-      const py = arch.field(Pos.y) as Float32Array;
-      const vx = arch.field(Vel.vx) as Float32Array;
-      const vy = arch.field(Vel.vy) as Float32Array;
-      for (let i = 0; i < arch.count; i++) {
-        px[i] += vx[i];
-        py[i] += vy[i];
-      }
+    em.forEach([Pos, Vel], (id) => {
+      em.set(id, Pos.x, (em.get(id, Pos.x) as number) + (em.get(id, Vel.vx) as number));
+      em.set(id, Pos.y, (em.get(id, Pos.y) as number) + (em.get(id, Vel.vy) as number));
     });
 
     const ids = em.query([Pos, Vel]);
@@ -379,16 +373,16 @@ describe('Typed Components (SoA)', () => {
     assert.equal(em.get(id, Pos.x), undefined);
   });
 
-  it('forEach field returns undefined for tag component', () => {
+  it('forEach iterates entities with tag components', () => {
     const Tag = component('TagFE');
     const Pos = component('PosFE', 'f32', ['x', 'y']);
     const id = em.createEntity();
     em.addComponent(id, Pos, { x: 1, y: 2 });
     em.addComponent(id, Tag, {});
 
-    em.forEach([Pos, Tag], (arch) => {
-      assert.ok(arch.field(Pos.x) instanceof Float32Array);
-    });
+    const visited: number[] = [];
+    em.forEach([Pos, Tag], (eid) => { visited.push(eid); });
+    assert.deepEqual(visited, [id]);
   });
 
   it('string component round-trip (add/get/set)', () => {
@@ -457,12 +451,9 @@ describe('Typed Components (SoA)', () => {
       em.addComponent(id, Name, { value: `e${i}` });
     }
 
-    em.forEach([Name], (arch) => {
-      const values = arch.field(Name.value);
-      assert.ok(Array.isArray(values));
-      assert.equal(values[0], 'e0');
-      assert.equal(values[4], 'e4');
-    });
+    const vals: string[] = [];
+    em.forEach([Name], (id) => { vals.push(em.get(id, Name.value) as string); });
+    assert.deepEqual(vals.sort(), ['e0', 'e1', 'e2', 'e3', 'e4']);
   });
 });
 
@@ -484,12 +475,9 @@ describe('Deferred Structural Changes during forEach', () => {
     em.addComponent(c, Pos, { x: 3, y: 0 });
 
     const visited: number[] = [];
-    em.forEach([Pos], (arch) => {
-      const ids = arch.entityIds;
-      for (let i = 0; i < arch.count; i++) {
-        visited.push(ids[i]);
-        if (ids[i] === a) em.removeComponent(a, Pos);
-      }
+    em.forEach([Pos], (id) => {
+      visited.push(id);
+      if (id === a) em.removeComponent(a, Pos);
     });
 
     assert.equal(visited.length, 3);
@@ -503,11 +491,8 @@ describe('Deferred Structural Changes during forEach', () => {
     em.addComponent(a, Pos, { x: 1, y: 0 });
     em.addComponent(b, Pos, { x: 2, y: 0 });
 
-    em.forEach([Pos], (arch) => {
-      const ids = arch.entityIds;
-      for (let i = 0; i < arch.count; i++) {
-        if (ids[i] === a) em.addComponent(a, Vel, { vx: 10, vy: 20 });
-      }
+    em.forEach([Pos], (id) => {
+      if (id === a) em.addComponent(a, Vel, { vx: 10, vy: 20 });
     });
 
     assert.equal(em.hasComponent(a, Vel), true);
@@ -519,10 +504,9 @@ describe('Deferred Structural Changes during forEach', () => {
     const a = em.createEntity();
     em.addComponent(a, Pos, { x: 1, y: 2 });
 
-    em.forEach([Pos], (arch) => {
-      const px = arch.field(Pos.x) as Float32Array;
-      em.addComponent(a, Pos, { x: 99, y: 88 });
-      assert.ok(Math.abs(px[0] - 99) < 0.001);
+    em.forEach([Pos], (id) => {
+      em.addComponent(id, Pos, { x: 99, y: 88 });
+      assert.ok(Math.abs(em.get(id, Pos.x) as number - 99) < 0.001);
     });
   });
 
@@ -535,12 +519,9 @@ describe('Deferred Structural Changes during forEach', () => {
     em.addComponent(c, Pos, { x: 3, y: 0 });
 
     const visited: number[] = [];
-    em.forEach([Pos], (arch) => {
-      const ids = arch.entityIds;
-      for (let i = 0; i < arch.count; i++) {
-        visited.push(ids[i]);
-        if (ids[i] === b) em.destroyEntity(b);
-      }
+    em.forEach([Pos], (id) => {
+      visited.push(id);
+      if (id === b) em.destroyEntity(b);
     });
 
     assert.equal(visited.length, 3);
@@ -581,10 +562,9 @@ describe('Deferred Structural Changes during forEach', () => {
     const a = em.createEntity();
     em.addComponent(a, Pos, { x: 1, y: 2 });
 
-    em.forEach([Pos], (arch) => {
-      em.set(a, Pos.x, 42);
-      const px = arch.field(Pos.x) as Float32Array;
-      assert.ok(Math.abs(px[0] - 42) < 0.001);
+    em.forEach([Pos], (id) => {
+      em.set(id, Pos.x, 42);
+      assert.ok(Math.abs(em.get(id, Pos.x) as number - 42) < 0.001);
     });
   });
 
@@ -820,12 +800,10 @@ describe('apply()', () => {
   it('random() fills field with values in [min, max]', () => {
     em.apply(Pos.x, random(5, 15));
 
-    em.forEach([Pos], (arch) => {
-      const px = arch.field(Pos.x) as Float32Array;
-      for (let i = 0; i < arch.count; i++) {
-        assert.ok(px[i] >= 5, `px[${i}]=${px[i]} should be >= 5`);
-        assert.ok(px[i] <= 15, `px[${i}]=${px[i]} should be <= 15`);
-      }
+    em.forEach([Pos], (id) => {
+      const x = em.get(id, Pos.x) as number;
+      assert.ok(x >= 5, `x=${x} should be >= 5`);
+      assert.ok(x <= 15, `x=${x} should be <= 15`);
     });
   });
 
@@ -833,53 +811,37 @@ describe('apply()', () => {
     em.apply(Pos.x, random(0, 100));
 
     const vals: number[] = [];
-    em.forEach([Pos], (arch) => {
-      const px = arch.field(Pos.x) as Float32Array;
-      for (let i = 0; i < arch.count; i++) vals.push(px[i]);
-    });
+    em.forEach([Pos], (id) => { vals.push(em.get(id, Pos.x) as number); });
     // With 20 entities and range [0,100] the values should not all be identical
     const allSame = vals.every(v => v === vals[0]);
     assert.ok(!allSame, 'random() should produce varying values');
   });
 
   it('add(a, random(min, max)) shifts each element by a random amount', () => {
-    // Record original values
     const before: number[] = [];
-    em.forEach([Pos], (arch) => {
-      const px = arch.field(Pos.x) as Float32Array;
-      for (let i = 0; i < arch.count; i++) before.push(px[i]);
-    });
+    em.forEach([Pos], (id) => { before.push(em.get(id, Pos.x) as number); });
 
     em.apply(Pos.x, add(Pos.x, random(-1, 1)));
 
     let idx = 0;
-    em.forEach([Pos], (arch) => {
-      const px = arch.field(Pos.x) as Float32Array;
-      for (let i = 0; i < arch.count; i++) {
-        const delta = px[i] - before[idx++];
-        assert.ok(delta >= -1 - 1e-5, `delta ${delta} should be >= -1`);
-        assert.ok(delta <=  1 + 1e-5, `delta ${delta} should be <= 1`);
-      }
+    em.forEach([Pos], (id) => {
+      const delta = (em.get(id, Pos.x) as number) - before[idx++];
+      assert.ok(delta >= -1 - 1e-5, `delta ${delta} should be >= -1`);
+      assert.ok(delta <=  1 + 1e-5, `delta ${delta} should be <= 1`);
     });
   });
 
   it('sub(a, random(min, max)) shifts each element by a negative random amount', () => {
     const before: number[] = [];
-    em.forEach([Pos], (arch) => {
-      const px = arch.field(Pos.x) as Float32Array;
-      for (let i = 0; i < arch.count; i++) before.push(px[i]);
-    });
+    em.forEach([Pos], (id) => { before.push(em.get(id, Pos.x) as number); });
 
     em.apply(Pos.x, sub(Pos.x, random(0, 2)));
 
     let idx = 0;
-    em.forEach([Pos], (arch) => {
-      const px = arch.field(Pos.x) as Float32Array;
-      for (let i = 0; i < arch.count; i++) {
-        const delta = before[idx++] - px[i]; // original - result = the subtracted amount
-        assert.ok(delta >= -1e-5, `delta ${delta} should be >= 0`);
-        assert.ok(delta <= 2 + 1e-5, `delta ${delta} should be <= 2`);
-      }
+    em.forEach([Pos], (id) => {
+      const delta = before[idx++] - (em.get(id, Pos.x) as number);
+      assert.ok(delta >= -1e-5, `delta ${delta} should be >= 0`);
+      assert.ok(delta <= 2 + 1e-5, `delta ${delta} should be <= 2`);
     });
   });
 
@@ -892,9 +854,8 @@ describe('apply()', () => {
     // Should not throw; Other archetype has no Pos.x
     em2.apply(Pos.x, scale(Pos.x, 2));
 
-    em2.forEach([Pos], (arch) => {
-      const px = arch.field(Pos.x) as Float32Array;
-      assert.equal(px[0], 14);
+    em2.forEach([Pos], (id) => {
+      assert.equal(em2.get(id, Pos.x), 14);
     });
   });
 
