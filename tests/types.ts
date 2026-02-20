@@ -33,14 +33,14 @@ em.addComponent(id, Name, { name: 'Hero', title: 'Sir' });
 const pos = em.getComponent(id, Position);
 
 // get/set: field descriptor access
-const px: any = em.get(id, Position.x as any);
-em.set(id, Position.x as any, 10);
+const px: any = em.get(id, Position.x);
+em.set(id, Position.x, 10);
 
 // forEach + field: accepts FieldRef
 em.forEach([Position, Velocity], (arch) => {
   const count: number = arch.count;
   const ids: EntityId[] = arch.entityIds;
-  const arrX = arch.field(Position.x as any);
+  const arrX = arch.field(Position.x);
 });
 
 // createEntityWith: alternating type, data

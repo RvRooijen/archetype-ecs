@@ -8,7 +8,11 @@ export { TYPED, componentSchemas, parseTypeSpec } from './ComponentRegistry.js';
 export type { ComponentDef, TypeSpec } from './ComponentRegistry.js';
 
 import { parseTypeSpec, componentSchemas, type ComponentDef, type TypeSpec } from './ComponentRegistry.js';
+import type { FieldRef } from './EntityManager.js';
 
+export function component(name: string): ComponentDef;
+export function component<F extends readonly string[]>(name: string, type: string, fields: F): ComponentDef & { readonly [K in F[number]]: FieldRef };
+export function component<S extends Record<string, string>>(name: string, schema: S): ComponentDef & { readonly [K in keyof S]: FieldRef };
 export function component(name: string, typeOrSchema?: string | Record<string, string>, fields?: string[]): ComponentDef {
   const sym = Symbol(name);
   const comp: any = { _sym: sym, _name: name };

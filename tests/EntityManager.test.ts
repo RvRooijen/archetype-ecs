@@ -300,10 +300,10 @@ describe('Typed Components (SoA)', () => {
     }
 
     em.forEach([Pos, Vel], (arch) => {
-      const px = arch.field(Pos.x as any);
-      const py = arch.field(Pos.y as any);
-      const vx = arch.field(Vel.vx as any);
-      const vy = arch.field(Vel.vy as any);
+      const px = arch.field(Pos.x);
+      const py = arch.field(Pos.y);
+      const vx = arch.field(Vel.vx);
+      const vy = arch.field(Vel.vy);
       for (let i = 0; i < arch.count; i++) {
         px[i] += vx[i];
         py[i] += vy[i];
@@ -367,16 +367,16 @@ describe('Typed Components (SoA)', () => {
     const Pos = component('PosGS', 'f32', ['x', 'y']);
     const id = em.createEntity();
     em.addComponent(id, Pos, { x: 3.5, y: 7.5 });
-    assert.ok(Math.abs(em.get(id, Pos.x as any) - 3.5) < 0.001);
-    em.set(id, Pos.x as any, 42);
-    assert.ok(Math.abs(em.get(id, Pos.x as any) - 42) < 0.001);
+    assert.ok(Math.abs(em.get(id, Pos.x) - 3.5) < 0.001);
+    em.set(id, Pos.x, 42);
+    assert.ok(Math.abs(em.get(id, Pos.x) - 42) < 0.001);
   });
 
   it('get returns undefined for missing entity/component', () => {
     const Pos = component('PosGFM', 'f32', ['x', 'y']);
-    assert.equal(em.get(999, Pos.x as any), undefined);
+    assert.equal(em.get(999, Pos.x), undefined);
     const id = em.createEntity();
-    assert.equal(em.get(id, Pos.x as any), undefined);
+    assert.equal(em.get(id, Pos.x), undefined);
   });
 
   it('forEach field returns undefined for tag component', () => {
@@ -387,7 +387,7 @@ describe('Typed Components (SoA)', () => {
     em.addComponent(id, Tag, {});
 
     em.forEach([Pos, Tag], (arch) => {
-      assert.ok(arch.field(Pos.x as any) instanceof Float32Array);
+      assert.ok(arch.field(Pos.x) instanceof Float32Array);
     });
   });
 
@@ -396,11 +396,11 @@ describe('Typed Components (SoA)', () => {
     const id = em.createEntity();
     em.addComponent(id, Name, { name: 'Hero', title: 'Sir' });
 
-    assert.equal(em.get(id, Name.name as any), 'Hero');
-    assert.equal(em.get(id, Name.title as any), 'Sir');
+    assert.equal(em.get(id, Name.name), 'Hero');
+    assert.equal(em.get(id, Name.title), 'Sir');
 
-    em.set(id, Name.name as any, 'Villain');
-    assert.equal(em.get(id, Name.name as any), 'Villain');
+    em.set(id, Name.name, 'Villain');
+    assert.equal(em.get(id, Name.name), 'Villain');
 
     const obj = em.getComponent(id, Name);
     assert.deepEqual(obj, { name: 'Villain', title: 'Sir' });
@@ -411,8 +411,8 @@ describe('Typed Components (SoA)', () => {
     const id = em.createEntity();
     em.addComponent(id, Label, { text: 'hello', color: 'red' });
 
-    assert.equal(em.get(id, Label.text as any), 'hello');
-    assert.equal(em.get(id, Label.color as any), 'red');
+    assert.equal(em.get(id, Label.text), 'hello');
+    assert.equal(em.get(id, Label.color), 'red');
   });
 
   it('string component growth past capacity', () => {
@@ -423,8 +423,8 @@ describe('Typed Components (SoA)', () => {
     }
     const ids = em.query([Name]);
     assert.equal(ids.length, 100);
-    assert.equal(em.get(ids[0], Name.value as any), 'entity_0');
-    assert.equal(em.get(ids[99], Name.value as any), 'entity_99');
+    assert.equal(em.get(ids[0], Name.value), 'entity_0');
+    assert.equal(em.get(ids[99], Name.value), 'entity_99');
   });
 
   it('string component swap-remove preserves data', () => {
@@ -437,8 +437,8 @@ describe('Typed Components (SoA)', () => {
     em.addComponent(c, Name, { value: 'ccc' });
 
     em.destroyEntity(a);
-    assert.equal(em.get(b, Name.value as any), 'bbb');
-    assert.equal(em.get(c, Name.value as any), 'ccc');
+    assert.equal(em.get(b, Name.value), 'bbb');
+    assert.equal(em.get(c, Name.value), 'ccc');
   });
 
   it('mixed string + numeric fields in one component', () => {
@@ -446,8 +446,8 @@ describe('Typed Components (SoA)', () => {
     const id = em.createEntity();
     em.addComponent(id, Item, { name: 'Sword', weight: 3.5 });
 
-    assert.equal(em.get(id, Item.name as any), 'Sword');
-    assert.ok(Math.abs(em.get(id, Item.weight as any) - 3.5) < 0.01);
+    assert.equal(em.get(id, Item.name), 'Sword');
+    assert.ok(Math.abs(em.get(id, Item.weight) - 3.5) < 0.01);
   });
 
   it('string component forEach field access', () => {
@@ -458,7 +458,7 @@ describe('Typed Components (SoA)', () => {
     }
 
     em.forEach([Name], (arch) => {
-      const values = arch.field(Name.value as any);
+      const values = arch.field(Name.value);
       assert.ok(Array.isArray(values));
       assert.equal(values[0], 'e0');
       assert.equal(values[4], 'e4');
@@ -539,7 +539,7 @@ describe('Deferred Structural Changes during forEach', () => {
     em.addComponent(a, Pos, { x: 1, y: 2 });
 
     em.forEach([Pos], (arch) => {
-      const px = arch.field(Pos.x as any);
+      const px = arch.field(Pos.x);
       // Overwrite via addComponent — same archetype, should be immediate
       em.addComponent(a, Pos, { x: 99, y: 88 });
       // The array should reflect the change immediately
@@ -615,9 +615,9 @@ describe('Deferred Structural Changes during forEach', () => {
     em.addComponent(a, Pos, { x: 1, y: 2 });
 
     em.forEach([Pos], (arch) => {
-      em.set(a, Pos.x as any, 42);
+      em.set(a, Pos.x, 42);
       // Should be immediately visible
-      const px = arch.field(Pos.x as any);
+      const px = arch.field(Pos.x);
       assert.ok(Math.abs(px[0] - 42) < 0.001);
     });
   });
