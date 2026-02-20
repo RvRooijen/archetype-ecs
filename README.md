@@ -139,6 +139,19 @@ em.apply(Position.x, add(Position.x, random(-1, 1)))
 em.apply(Position.x, random(0, 800))
 ```
 
+An optional `filter` restricts which archetypes are processed — the same `with` / `without` semantics as `forEach` and `query`:
+
+```ts
+// only move entities that also have Velocity (without: skip frozen ones)
+em.apply(Position.x, add(Position.x, Velocity.vx), { without: [Frozen] })
+em.apply(Position.y, add(Position.y, Velocity.vy), { without: [Frozen] })
+
+// combine with / without
+em.apply(Position.x, add(Position.x, Velocity.vx), { with: [Active], without: [Frozen] })
+```
+
+Archetype matching for filtered calls is cached — the filter adds no per-frame overhead after the first call.
+
 #### `forEach` — batch processing with TypedArray access
 
 For per-entity logic that needs both raw field data and entity IDs. You get the backing TypedArrays and entity ID list together, archetype by archetype.
@@ -189,6 +202,7 @@ const total = em.count([Position])
 | **Runs** | Every frame | Every frame | On demand |
 | **Allocates** | Nothing | Nothing | `number[]` of entity IDs |
 | **Access** | Declarative expressions | TypedArrays + entity IDs per archetype | `get` / `set` by entity ID |
+| **Filtering** | `{ with?, without? }` optional filter | `exclude?` array | `exclude?` array |
 
 ### Systems
 
@@ -308,7 +322,7 @@ WASM SIMD uses `f32x4.add`: a single CPU instruction that adds **4 floats in par
 When WASM mode is active, all numeric TypedArrays (`Float32Array`, `Int32Array`, etc.) are allocated on a shared `WebAssembly.Memory` via a bump allocator. This means the SIMD kernel operates directly on the data — no copying between JS and WASM. String fields always use regular JS arrays.
 
 - The arena reserves 128 MB virtual address space (lazily committed — no physical RAM cost on most OSes)
-- The bump allocator doesn't reclaim memory — frequent archetype churn may waste space
+- Freed slots from archetype growth are reused via a size-bucketed free list — total arena usage stays bounded at ~2× peak live size
 
 ---
 
@@ -376,7 +390,7 @@ Returns an entity manager. WASM SIMD is auto-detected and enabled by default. Pa
 | `set(id, Comp.field, value)` | Write a single field |
 | `query(include, exclude?)` | Get matching entity IDs |
 | `count(include, exclude?)` | Count matching entities |
-| `apply(target, expr)` | Set a field to an expression result — SIMD-accelerated for `f32` |
+| `apply(target, expr, filter?)` | Set a field to an expression result — SIMD-accelerated for `f32`. Optional `{ with?, without? }` restricts which archetypes are processed. |
 | `forEach(include, callback, exclude?)` | Iterate archetypes with TypedArray access |
 | `onAdd(Comp, callback)` | Register callback for component additions *(deferred)* |
 | `onRemove(Comp, callback)` | Register callback for component removals *(deferred)* |
