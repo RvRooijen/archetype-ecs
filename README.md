@@ -244,7 +244,18 @@ add(a, random(min, max))  // a[i] + random value in [min, max]
 
 `random()` uses a vectorized LCG (Linear Congruential Generator) in the WASM module — 4 random floats per SIMD instruction, fully independent of `Math.random()`. `b` in `add`/`sub`/`mul` can be either a field reference or a `random()` expression.
 
-When WASM SIMD is available and the fields are `f32`, this runs 4x faster than a manual JS loop. Otherwise it falls back to scalar JS automatically. For operations that can't be expressed as simple math, use [`forEach`](#forEach--custom-operations).
+**1M `f32` entities — SIMD vs scalar JS fallback:**
+
+| expression | SIMD (ms) | JS (ms) | speedup |
+|---|---|---|---|
+| `add(a, b)` | 0.30 | 2.05 | **7×** |
+| `sub(a, b)` | 0.29 | 2.06 | **7×** |
+| `mul(a, b)` | 0.30 | 2.05 | **7×** |
+| `scale(a, s)` | 0.19 | 4.80 | **25×** |
+| `random(min, max)` | 0.54 | 10.7 | **20×** |
+| `add(a, random())` | 0.62 | 12.9 | **21×** |
+
+When WASM SIMD is available and the fields are `f32`, operations automatically use the SIMD path. Otherwise they fall back to scalar JS. For operations that can't be expressed as simple math, use [`forEach`](#forEach--custom-operations).
 
 #### When does SIMD kick in?
 

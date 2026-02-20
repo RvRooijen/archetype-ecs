@@ -869,10 +869,15 @@ export function createEntityManager(options?: { wasm?: boolean }): EntityManager
               kernels.add_random_f32(dst.byteOffset, srcA.byteOffset, prngStateOffset, rnd.min, range, n);
             } else {
               const min = rnd.min;
-              const op = expr._op === 'add' ? (av: number, r: number) => av + r
-                       : expr._op === 'sub' ? (av: number, r: number) => av - r
-                       : (av: number, r: number) => av * r;
-              for (let i = 0; i < n; i++) (dst as unknown as number[])[i] = op((srcA as unknown as number[])[i], min + Math.random() * range);
+              const dstA = dst as unknown as number[];
+              const srcAA = srcA as unknown as number[];
+              if (expr._op === 'add') {
+                for (let i = 0; i < n; i++) dstA[i] = srcAA[i] + min + Math.random() * range;
+              } else if (expr._op === 'sub') {
+                for (let i = 0; i < n; i++) dstA[i] = srcAA[i] - (min + Math.random() * range);
+              } else {
+                for (let i = 0; i < n; i++) dstA[i] = srcAA[i] * (min + Math.random() * range);
+              }
             }
           } else {
             // b is FieldRef — existing SIMD path
@@ -886,10 +891,16 @@ export function createEntityManager(options?: { wasm?: boolean }): EntityManager
               else if (expr._op === 'sub') kernels.sub_f32(dst.byteOffset, srcB.byteOffset, n);
               else kernels.mul_f32(dst.byteOffset, srcB.byteOffset, n);
             } else {
-              const op = expr._op === 'add' ? (av: number, b: number) => av + b
-                       : expr._op === 'sub' ? (av: number, b: number) => av - b
-                       : (av: number, b: number) => av * b;
-              for (let i = 0; i < n; i++) (dst as unknown as number[])[i] = op((srcA as unknown as number[])[i], (srcB as unknown as number[])[i]);
+              const dstA = dst as unknown as number[];
+              const srcAA = srcA as unknown as number[];
+              const srcBA = srcB as unknown as number[];
+              if (expr._op === 'add') {
+                for (let i = 0; i < n; i++) dstA[i] = srcAA[i] + srcBA[i];
+              } else if (expr._op === 'sub') {
+                for (let i = 0; i < n; i++) dstA[i] = srcAA[i] - srcBA[i];
+              } else {
+                for (let i = 0; i < n; i++) dstA[i] = srcAA[i] * srcBA[i];
+              }
             }
           }
         }
