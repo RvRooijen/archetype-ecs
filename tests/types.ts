@@ -3,10 +3,10 @@
 // No runtime execution needed; if this file compiles, the types are correct.
 
 import {
-  createEntityManager, createSystem, createSystems, component,
+  createEntityManager, createSystems, component,
   System, OnAdded, OnRemoved,
   type ComponentDef, type FieldRef, type EntityId,
-  type SystemContext, type FunctionalSystemConstructor, type FunctionalSystem, type Pipeline
+  type Pipeline
 } from '../src/index.js';
 
 // --- component() creates ComponentDef ---
@@ -46,37 +46,6 @@ em.forEach([Position, Velocity], (arch) => {
 // createEntityWith: alternating type, data
 em.createEntityWith(Position, { x: 0, y: 0 }, Velocity, { vx: 1, vy: 1 });
 
-// --- createSystem returns FunctionalSystem ---
-const sys: FunctionalSystem = createSystem(em, (s: SystemContext) => {
-  // onAdded with 1 type
-  s.onAdded(Position, (entityId: EntityId) => {});
-  // onAdded with 2 types
-  s.onAdded(Position, Velocity, (entityId: EntityId) => {});
-  // onRemoved with 1 type
-  s.onRemoved(Position, (entityId: EntityId) => {});
-  // onRemoved with 2 types
-  s.onRemoved(Position, Velocity, (entityId: EntityId) => {});
-
-  return () => {
-    s.forEach([Position, Velocity], (view) => {
-      const count: number = view.count;
-    });
-    s.forEach([Position], (_view) => {}, [Velocity]);
-  };
-});
-sys();
-sys.dispose();
-
-// --- FunctionalSystemConstructor type ---
-const ctor: FunctionalSystemConstructor = (s) => {
-  s.onAdded(Position, (_id) => {});
-};
-
-// --- createSystems returns Pipeline ---
-const pipeline: Pipeline = createSystems(em, [ctor]);
-pipeline();
-pipeline.dispose();
-
 // --- Class-based System ---
 class TestSystem extends System {
   @OnAdded(Position)
@@ -96,7 +65,7 @@ const testSys = new TestSystem(em);
 testSys.run();
 testSys.dispose();
 
-// --- createSystems accepts mixed entries ---
-const mixedPipeline: Pipeline = createSystems(em, [ctor, TestSystem]);
-mixedPipeline();
-mixedPipeline.dispose();
+// --- createSystems returns Pipeline ---
+const pipeline: Pipeline = createSystems(em, [TestSystem]);
+pipeline();
+pipeline.dispose();

@@ -2,7 +2,7 @@
 // Compares: ECS forEach (JS), ECS forEach (WASM-backed), ECS + WASM SIMD kernel
 // Run with: node --expose-gc bench/wasm-iteration-bench.js
 
-import { createEntityManager, component, instantiateKernels } from '../dist/index.js';
+import { createEntityManager, component, add } from '../dist/index.js';
 
 const COUNT = 1_000_000;
 const FRAMES = 500;
@@ -106,54 +106,11 @@ function benchECSWasmStorage() {
   return (performance.now() - t0) / FRAMES;
 }
 
-// ── Benchmark 3: ECS WASM-backed + WASM SIMD kernel ─────────────────────────
+// ── Benchmark 3: em.apply (auto SIMD dispatch) ──────────────────────────────
 
-async function benchECSWasmSIMD() {
-  const Position = component('SPos', { x: 'f32', y: 'f32' });
-  const Velocity = component('SVel', { vx: 'f32', vy: 'f32' });
-  const em = createEntityManager({ wasm: true });
-
-  for (let i = 0; i < COUNT; i++) {
-    em.createEntityWith(
-      Position, { x: i * 0.1, y: i * 0.1 },
-      Velocity, { vx: 1, vy: 1 },
-    );
-  }
-
-  const kernels = await instantiateKernels(em.wasmMemory);
-
-  for (let f = 0; f < WARMUP; f++) {
-    em.forEach([Position, Velocity], (arch) => {
-      kernels.iterate_simd(
-        arch.fieldOffset(Position.x),
-        arch.fieldOffset(Position.y),
-        arch.fieldOffset(Velocity.vx),
-        arch.fieldOffset(Velocity.vy),
-        arch.count,
-      );
-    });
-  }
-
-  const t0 = performance.now();
-  for (let f = 0; f < FRAMES; f++) {
-    em.forEach([Position, Velocity], (arch) => {
-      kernels.iterate_simd(
-        arch.fieldOffset(Position.x),
-        arch.fieldOffset(Position.y),
-        arch.fieldOffset(Velocity.vx),
-        arch.fieldOffset(Velocity.vy),
-        arch.count,
-      );
-    });
-  }
-  return (performance.now() - t0) / FRAMES;
-}
-
-// ── Benchmark 4: ECS fieldAdd (auto SIMD dispatch) ──────────────────────────
-
-function benchECSFieldAdd() {
-  const Position = component('FAPos', { x: 'f32', y: 'f32' });
-  const Velocity = component('FAVel', { vx: 'f32', vy: 'f32' });
+function benchECSApply() {
+  const Position = component('APos', { x: 'f32', y: 'f32' });
+  const Velocity = component('AVel', { vx: 'f32', vy: 'f32' });
   const em = createEntityManager({ wasm: true });
 
   for (let i = 0; i < COUNT; i++) {
@@ -164,18 +121,14 @@ function benchECSFieldAdd() {
   }
 
   for (let f = 0; f < WARMUP; f++) {
-    em.forEach([Position, Velocity], (arch) => {
-      arch.fieldAdd(Position.x, Velocity.vx);
-      arch.fieldAdd(Position.y, Velocity.vy);
-    });
+    em.apply(Position.x, add(Position.x, Velocity.vx));
+    em.apply(Position.y, add(Position.y, Velocity.vy));
   }
 
   const t0 = performance.now();
   for (let f = 0; f < FRAMES; f++) {
-    em.forEach([Position, Velocity], (arch) => {
-      arch.fieldAdd(Position.x, Velocity.vx);
-      arch.fieldAdd(Position.y, Velocity.vy);
-    });
+    em.apply(Position.x, add(Position.x, Velocity.vx));
+    em.apply(Position.y, add(Position.y, Velocity.vy));
   }
   return (performance.now() - t0) / FRAMES;
 }
@@ -224,7 +177,7 @@ async function main() {
 
   // 1. ECS forEach (default JS storage)
   {
-    console.log('  [1/4] ECS forEach (JS storage, baseline)');
+    console.log('  [1/3] ECS forEach (JS storage, baseline)');
     const times = [];
     for (let r = 0; r < RUNS; r++) {
       process.stdout.write(`        Run ${r + 1}/${RUNS}...`);
@@ -237,7 +190,7 @@ async function main() {
 
   // 2. ECS forEach (WASM-backed storage, JS iteration)
   {
-    console.log('  [2/4] ECS forEach (WASM storage, JS iter)');
+    console.log('  [2/3] ECS forEach (WASM storage, JS iter)');
     const times = [];
     for (let r = 0; r < RUNS; r++) {
       process.stdout.write(`        Run ${r + 1}/${RUNS}...`);
@@ -248,30 +201,17 @@ async function main() {
     results.push({ name: 'ECS forEach (WASM storage)', value: median(times) });
   }
 
-  // 3. ECS WASM-backed + WASM SIMD kernel
+  // 3. em.apply (auto SIMD dispatch)
   {
-    console.log('  [3/4] ECS + WASM SIMD kernel (manual)');
+    console.log('  [3/3] em.apply (auto SIMD)');
     const times = [];
     for (let r = 0; r < RUNS; r++) {
       process.stdout.write(`        Run ${r + 1}/${RUNS}...`);
-      const ms = await benchECSWasmSIMD();
+      const ms = benchECSApply();
       times.push(ms);
       console.log(` ${ms.toFixed(3)} ms/frame`);
     }
-    results.push({ name: 'ECS + WASM SIMD (manual)', value: median(times) });
-  }
-
-  // 4. ECS fieldAdd (auto SIMD dispatch)
-  {
-    console.log('  [4/4] ECS fieldAdd (auto SIMD)');
-    const times = [];
-    for (let r = 0; r < RUNS; r++) {
-      process.stdout.write(`        Run ${r + 1}/${RUNS}...`);
-      const ms = benchECSFieldAdd();
-      times.push(ms);
-      console.log(` ${ms.toFixed(3)} ms/frame`);
-    }
-    results.push({ name: 'ECS fieldAdd (auto)', value: median(times) });
+    results.push({ name: 'em.apply (auto SIMD)', value: median(times) });
   }
 
   printTable(

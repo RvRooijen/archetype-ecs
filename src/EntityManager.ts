@@ -9,6 +9,19 @@ export type EntityId = number;
 export type SoAArrayValue = Float32Array | Float64Array | Int8Array | Int16Array | Int32Array
   | Uint8Array | Uint16Array | Uint32Array | unknown[];
 
+// ── Field expressions ─────────────────────────────────────
+
+export type FieldExpr =
+  | { _op: 'add'; a: FieldRef; b: FieldRef }
+  | { _op: 'sub'; a: FieldRef; b: FieldRef }
+  | { _op: 'mul'; a: FieldRef; b: FieldRef }
+  | { _op: 'scale'; a: FieldRef; s: number };
+
+export function add(a: FieldRef, b: FieldRef): FieldExpr { return { _op: 'add', a, b }; }
+export function sub(a: FieldRef, b: FieldRef): FieldExpr { return { _op: 'sub', a, b }; }
+export function mul(a: FieldRef, b: FieldRef): FieldExpr { return { _op: 'mul', a, b }; }
+export function scale(a: FieldRef, s: number): FieldExpr { return { _op: 'scale', a, s }; }
+
 export interface ArchetypeView {
   readonly id: number;
   readonly entityIds: EntityId[];
@@ -17,8 +30,6 @@ export interface ArchetypeView {
   readonly snapshotCount: number;
   field(ref: FieldRef): any;
   fieldStride(ref: FieldRef): number;
-  fieldOffset(ref: FieldRef): number;
-  fieldAdd(target: FieldRef, source: FieldRef): void;
   snapshot(ref: FieldRef): any;
 }
 
@@ -44,6 +55,7 @@ export interface EntityManager {
   createEntityWith(...args: unknown[]): EntityId;
   count(include: ComponentDef[], exclude?: ComponentDef[]): number;
   forEach(include: ComponentDef[], callback: (view: ArchetypeView) => void, exclude?: ComponentDef[]): void;
+  apply(target: FieldRef, expr: FieldExpr): void;
   onAdd(type: ComponentDef, callback: (entityId: EntityId) => void): () => void;
   onRemove(type: ComponentDef, callback: (entityId: EntityId) => void): () => void;
   flushHooks(): void;
@@ -62,7 +74,6 @@ export interface EntityManager {
     nameToSymbol: Record<string, ComponentDef>,
     options?: { deserializers?: Map<string, (data: unknown) => unknown> }
   ): void;
-  readonly wasmMemory: WebAssembly.Memory | null;
 }
 
 // ── Internal types ───────────────────────────────────────
@@ -595,8 +606,6 @@ export function createEntityManager(options?: { wasm?: boolean }): EntityManager
   }
 
   return {
-    wasmMemory: arena ? arena.memory : null,
-
     createEntity(): EntityId {
       const id = nextId++;
       allEntityIds.add(id);
@@ -770,28 +779,6 @@ export function createEntityManager(options?: { wasm?: boolean }): EntityManager
               if (!store) return 1;
               return store._arraySizes[ref._field] || 1;
             },
-            fieldOffset(ref: FieldRef) {
-              if (!arena) return -1;
-              const store = arch.components.get(ref._sym);
-              if (!store) return -1;
-              const arr = store._fields[ref._field];
-              if (!arr || arr instanceof Array) return -1;
-              return (arr as Exclude<SoAArrayValue, unknown[]>).byteOffset;
-            },
-            fieldAdd(target: FieldRef, source: FieldRef) {
-              const tStore = arch.components.get(target._sym);
-              const sStore = arch.components.get(source._sym);
-              if (!tStore || !sStore) return;
-              const dst = tStore._fields[target._field];
-              const src = sStore._fields[source._field];
-              const stride = tStore._arraySizes[target._field] || 1;
-              const n = arch.count * stride;
-              if (kernels && dst instanceof Float32Array && src instanceof Float32Array) {
-                kernels.add_f32(dst.byteOffset, src.byteOffset, n);
-              } else {
-                for (let i = 0; i < n; i++) (dst as never[])[i] = ((dst as never[])[i] as number + ((src as never[])[i] as number)) as never;
-              }
-            },
             snapshot(ref: FieldRef) {
               if (!snaps) return undefined;
               const snap = snaps.get(ref._sym);
@@ -805,6 +792,67 @@ export function createEntityManager(options?: { wasm?: boolean }): EntityManager
         iterating--;
         if (iterating === 0 && deferred.length > 0) {
           flushDeferred();
+        }
+      }
+    },
+
+    apply(target: FieldRef, expr: FieldExpr): void {
+      // Collect required component symbols from the expression
+      const syms = new Set<symbol>([target._sym]);
+      if ('a' in expr) syms.add(expr.a._sym);
+      if ('b' in expr) syms.add(expr.b._sym);
+
+      // Find matching archetypes
+      const types = [...syms].map(s => ({ _sym: s }) as ComponentDef);
+      const matching = getMatchingArchetypes(types);
+
+      for (let a = 0; a < matching.length; a++) {
+        const arch = matching[a];
+        if (arch.count === 0) continue;
+
+        const tStore = arch.components.get(target._sym);
+        if (!tStore) continue;
+        const dst = tStore._fields[target._field];
+        const stride = tStore._arraySizes[target._field] || 1;
+        const n = arch.count * stride;
+
+        if (expr._op === 'scale') {
+          if (kernels && dst instanceof Float32Array) {
+            const aStore = arch.components.get(expr.a._sym);
+            if (!aStore) continue;
+            const src = aStore._fields[expr.a._field];
+            if (src instanceof Float32Array) {
+              // If target !== source, copy first
+              if (dst !== src) dst.set(src.subarray(0, n));
+              kernels.scale_f32(dst.byteOffset, expr.s, n);
+            } else {
+              for (let i = 0; i < n; i++) (dst as unknown as number[])[i] = ((src as unknown as number[])[i] * expr.s);
+            }
+          } else {
+            const aStore = arch.components.get(expr.a._sym);
+            if (!aStore) continue;
+            const src = aStore._fields[expr.a._field];
+            for (let i = 0; i < n; i++) (dst as unknown as number[])[i] = ((src as unknown as number[])[i] * expr.s);
+          }
+        } else {
+          const aStore = arch.components.get(expr.a._sym);
+          const bStore = arch.components.get(expr.b._sym);
+          if (!aStore || !bStore) continue;
+          const srcA = aStore._fields[expr.a._field];
+          const srcB = bStore._fields[expr.b._field];
+
+          if (kernels && dst instanceof Float32Array && srcA instanceof Float32Array && srcB instanceof Float32Array) {
+            // If target !== srcA, copy srcA into target first
+            if (dst !== srcA) dst.set(srcA.subarray(0, n));
+            if (expr._op === 'add') kernels.add_f32(dst.byteOffset, srcB.byteOffset, n);
+            else if (expr._op === 'sub') kernels.sub_f32(dst.byteOffset, srcB.byteOffset, n);
+            else kernels.mul_f32(dst.byteOffset, srcB.byteOffset, n);
+          } else {
+            const op = expr._op === 'add' ? (a: number, b: number) => a + b
+                     : expr._op === 'sub' ? (a: number, b: number) => a - b
+                     : (a: number, b: number) => a * b;
+            for (let i = 0; i < n; i++) (dst as unknown as number[])[i] = op((srcA as unknown as number[])[i], (srcB as unknown as number[])[i]);
+          }
         }
       }
     },

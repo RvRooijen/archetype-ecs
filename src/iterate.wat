@@ -132,4 +132,126 @@
       )
     )
   )
+
+  ;; Generic f32 sub: dst[i] -= src[i], SIMD 4-wide + scalar remainder
+  (func (export "sub_f32")
+    (param $dst i32) (param $src i32) (param $count i32)
+    (local $i i32)
+    (local $off i32)
+    (local $end4 i32)
+    (local.set $end4 (i32.and (local.get $count) (i32.const -4)))
+    (local.set $i (i32.const 0))
+    (block $break
+      (loop $loop
+        (br_if $break (i32.ge_u (local.get $i) (local.get $end4)))
+        (local.set $off (i32.shl (local.get $i) (i32.const 2)))
+        (v128.store
+          (i32.add (local.get $dst) (local.get $off))
+          (f32x4.sub
+            (v128.load (i32.add (local.get $dst) (local.get $off)))
+            (v128.load (i32.add (local.get $src) (local.get $off)))
+          )
+        )
+        (local.set $i (i32.add (local.get $i) (i32.const 4)))
+        (br $loop)
+      )
+    )
+    (block $break2
+      (loop $loop2
+        (br_if $break2 (i32.ge_u (local.get $i) (local.get $count)))
+        (local.set $off (i32.shl (local.get $i) (i32.const 2)))
+        (f32.store
+          (i32.add (local.get $dst) (local.get $off))
+          (f32.sub
+            (f32.load (i32.add (local.get $dst) (local.get $off)))
+            (f32.load (i32.add (local.get $src) (local.get $off)))
+          )
+        )
+        (local.set $i (i32.add (local.get $i) (i32.const 1)))
+        (br $loop2)
+      )
+    )
+  )
+
+  ;; Generic f32 mul: dst[i] *= src[i], SIMD 4-wide + scalar remainder
+  (func (export "mul_f32")
+    (param $dst i32) (param $src i32) (param $count i32)
+    (local $i i32)
+    (local $off i32)
+    (local $end4 i32)
+    (local.set $end4 (i32.and (local.get $count) (i32.const -4)))
+    (local.set $i (i32.const 0))
+    (block $break
+      (loop $loop
+        (br_if $break (i32.ge_u (local.get $i) (local.get $end4)))
+        (local.set $off (i32.shl (local.get $i) (i32.const 2)))
+        (v128.store
+          (i32.add (local.get $dst) (local.get $off))
+          (f32x4.mul
+            (v128.load (i32.add (local.get $dst) (local.get $off)))
+            (v128.load (i32.add (local.get $src) (local.get $off)))
+          )
+        )
+        (local.set $i (i32.add (local.get $i) (i32.const 4)))
+        (br $loop)
+      )
+    )
+    (block $break2
+      (loop $loop2
+        (br_if $break2 (i32.ge_u (local.get $i) (local.get $count)))
+        (local.set $off (i32.shl (local.get $i) (i32.const 2)))
+        (f32.store
+          (i32.add (local.get $dst) (local.get $off))
+          (f32.mul
+            (f32.load (i32.add (local.get $dst) (local.get $off)))
+            (f32.load (i32.add (local.get $src) (local.get $off)))
+          )
+        )
+        (local.set $i (i32.add (local.get $i) (i32.const 1)))
+        (br $loop2)
+      )
+    )
+  )
+
+  ;; Scale f32: dst[i] *= scalar, SIMD 4-wide + scalar remainder
+  (func (export "scale_f32")
+    (param $dst i32) (param $scalar f32) (param $count i32)
+    (local $i i32)
+    (local $off i32)
+    (local $end4 i32)
+    (local $splat v128)
+    (local.set $splat (f32x4.splat (local.get $scalar)))
+    (local.set $end4 (i32.and (local.get $count) (i32.const -4)))
+    (local.set $i (i32.const 0))
+    (block $break
+      (loop $loop
+        (br_if $break (i32.ge_u (local.get $i) (local.get $end4)))
+        (local.set $off (i32.shl (local.get $i) (i32.const 2)))
+        (v128.store
+          (i32.add (local.get $dst) (local.get $off))
+          (f32x4.mul
+            (v128.load (i32.add (local.get $dst) (local.get $off)))
+            (local.get $splat)
+          )
+        )
+        (local.set $i (i32.add (local.get $i) (i32.const 4)))
+        (br $loop)
+      )
+    )
+    (block $break2
+      (loop $loop2
+        (br_if $break2 (i32.ge_u (local.get $i) (local.get $count)))
+        (local.set $off (i32.shl (local.get $i) (i32.const 2)))
+        (f32.store
+          (i32.add (local.get $dst) (local.get $off))
+          (f32.mul
+            (f32.load (i32.add (local.get $dst) (local.get $off)))
+            (local.get $scalar)
+          )
+        )
+        (local.set $i (i32.add (local.get $i) (i32.const 1)))
+        (br $loop2)
+      )
+    )
+  )
 )

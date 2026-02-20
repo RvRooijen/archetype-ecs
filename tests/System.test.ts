@@ -1,7 +1,7 @@
 import { describe, it, beforeEach } from 'node:test';
 import assert from 'node:assert/strict';
 import { createEntityManager, type EntityManager } from '../src/EntityManager.js';
-import { createSystem, createSystems, System, OnAdded, OnRemoved } from '../src/System.js';
+import { createSystems, System, OnAdded, OnRemoved } from '../src/System.js';
 import type { EntityId } from '../src/EntityManager.js';
 import { component } from '../src/index.js';
 
@@ -11,229 +11,6 @@ const Position = component('Position', 'f32', ['x', 'y']);
 const Velocity = component('Velocity', 'f32', ['vx', 'vy']);
 const Health = component('Health', 'f32', ['hp']);
 const Tag = component('Tag');
-
-// ── Functional API ───────────────────────────────────────
-
-describe('createSystem (functional)', () => {
-  let em: EntityManager;
-
-  beforeEach(() => {
-    em = createEntityManager();
-  });
-
-  it('onAdded fires callback after flush + run', () => {
-    const collected: EntityId[] = [];
-    const sys = createSystem(em, (s) => {
-      s.onAdded(Health, (id: EntityId) => collected.push(id));
-    });
-
-    const e1 = em.createEntity();
-    em.addComponent(e1, Health, { hp: 100 });
-    em.flushHooks();
-    sys();
-    assert.deepEqual(collected, [e1]);
-
-    sys.dispose();
-  });
-
-  it('onAdded with multiple types only fires when entity has ALL types', () => {
-    const collected: EntityId[] = [];
-    const sys = createSystem(em, (s) => {
-      s.onAdded(Health, Position, (id: EntityId) => collected.push(id));
-    });
-
-    const e1 = em.createEntity();
-    em.addComponent(e1, Health, { hp: 100 });
-    em.flushHooks();
-    sys();
-    assert.deepEqual(collected, []);
-
-    em.addComponent(e1, Position, { x: 0, y: 0 });
-    em.flushHooks();
-    sys();
-    assert.deepEqual(collected, [e1]);
-
-    sys.dispose();
-  });
-
-  it('onAdded deduplicates when multiple types trigger for same entity', () => {
-    const collected: EntityId[] = [];
-    const sys = createSystem(em, (s) => {
-      s.onAdded(Health, Position, (id: EntityId) => collected.push(id));
-    });
-
-    const e1 = em.createEntityWith(Health, { hp: 50 }, Position, { x: 0, y: 0 });
-    em.flushHooks();
-    sys();
-    assert.deepEqual(collected, [e1]);
-
-    sys.dispose();
-  });
-
-  it('onRemoved fires callback after flush + run', () => {
-    const collected: EntityId[] = [];
-    const sys = createSystem(em, (s) => {
-      s.onRemoved(Health, (id: EntityId) => collected.push(id));
-    });
-
-    const e1 = em.createEntity();
-    em.addComponent(e1, Health, { hp: 50 });
-    em.flushHooks();
-    sys();
-
-    em.removeComponent(e1, Health);
-    em.flushHooks();
-    sys();
-    assert.deepEqual(collected, [e1]);
-
-    sys.dispose();
-  });
-
-  it('onRemoved with multiple types deduplicates', () => {
-    const collected: EntityId[] = [];
-    const sys = createSystem(em, (s) => {
-      s.onRemoved(Health, Position, (id: EntityId) => collected.push(id));
-    });
-
-    const e1 = em.createEntityWith(Health, { hp: 50 }, Position, { x: 0, y: 0 });
-    em.flushHooks();
-    sys();
-
-    em.removeComponent(e1, Health);
-    em.removeComponent(e1, Position);
-    em.flushHooks();
-    sys();
-    assert.deepEqual(collected, [e1]);
-
-    sys.dispose();
-  });
-
-  it('buffers cleared after sys() — no double processing', () => {
-    const collected: EntityId[] = [];
-    const sys = createSystem(em, (s) => {
-      s.onAdded(Health, (id: EntityId) => collected.push(id));
-    });
-
-    const e1 = em.createEntity();
-    em.addComponent(e1, Health, { hp: 100 });
-    em.flushHooks();
-    sys();
-    assert.deepEqual(collected, [e1]);
-
-    collected.length = 0;
-    sys();
-    assert.deepEqual(collected, []);
-
-    sys.dispose();
-  });
-
-  it('dispose() unsubscribes hooks', () => {
-    const collected: EntityId[] = [];
-    const sys = createSystem(em, (s) => {
-      s.onAdded(Health, (id: EntityId) => collected.push(id));
-    });
-
-    sys.dispose();
-
-    const e1 = em.createEntity();
-    em.addComponent(e1, Health, { hp: 100 });
-    em.flushHooks();
-    sys();
-    assert.deepEqual(collected, []);
-  });
-
-  it('forEach wraps em.forEach correctly (include + exclude)', () => {
-    const e1 = em.createEntity();
-    em.addComponent(e1, Position, { x: 1, y: 2 });
-    em.addComponent(e1, Velocity, { vx: 3, vy: 4 });
-
-    const e2 = em.createEntity();
-    em.addComponent(e2, Position, { x: 5, y: 6 });
-    em.addComponent(e2, Tag);
-
-    let count = 0;
-    const sys = createSystem(em, (s) => {
-      return () => {
-        s.forEach([Position], (view) => { count += view.count; }, [Tag]);
-      };
-    });
-
-    sys();
-    assert.equal(count, 1);
-    sys.dispose();
-  });
-
-  it('hooks-only system (no tick) works', () => {
-    const added: EntityId[] = [];
-    const sys = createSystem(em, (s) => {
-      s.onAdded(Tag, (id: EntityId) => added.push(id));
-    });
-
-    const e1 = em.createEntity();
-    em.addComponent(e1, Tag);
-    em.flushHooks();
-    sys();
-    assert.deepEqual(added, [e1]);
-    sys.dispose();
-  });
-
-  it('onRemoved handler can read removed component data via get()', () => {
-    const hpValues: number[] = [];
-    const sys = createSystem(em, (s) => {
-      s.onRemoved(Health, (id: EntityId) => {
-        hpValues.push(em.get(id, Health.hp) as number);
-      });
-    });
-
-    const e1 = em.createEntityWith(Health, { hp: 77 });
-    em.flushHooks();
-    sys();
-
-    em.removeComponent(e1, Health);
-    em.flushHooks();
-    sys();
-
-    assert.ok(Math.abs(hpValues[0] - 77) < 0.001);
-    sys.dispose();
-  });
-
-  it('onRemoved handler can read data of destroyed entity', () => {
-    const hpValues: number[] = [];
-    const sys = createSystem(em, (s) => {
-      s.onRemoved(Health, (id: EntityId) => {
-        hpValues.push(em.get(id, Health.hp) as number);
-      });
-    });
-
-    const e1 = em.createEntityWith(Health, { hp: 55 });
-    em.flushHooks();
-    sys();
-
-    em.destroyEntity(e1);
-    em.flushHooks();
-    sys();
-
-    assert.ok(Math.abs(hpValues[0] - 55) < 0.001);
-    sys.dispose();
-  });
-
-  it('query-only system (no hooks) works', () => {
-    const e1 = em.createEntity();
-    em.addComponent(e1, Position, { x: 10, y: 20 });
-    em.addComponent(e1, Velocity, { vx: 1, vy: 2 });
-
-    let totalCount = 0;
-    const sys = createSystem(em, (s) => {
-      return () => {
-        s.forEach([Position, Velocity], (view) => { totalCount += view.count; });
-      };
-    });
-
-    sys();
-    assert.equal(totalCount, 1);
-    sys.dispose();
-  });
-});
 
 // ── Decorator-based class API ────────────────────────────
 
@@ -592,17 +369,6 @@ describe('createSystems', () => {
     em = createEntityManager();
   });
 
-  it('runs functional systems in order', () => {
-    const order: string[] = [];
-    function SysA() { return () => { order.push('A'); }; }
-    function SysB() { return () => { order.push('B'); }; }
-
-    const pipeline = createSystems(em, [SysA, SysB]);
-    pipeline();
-    assert.deepEqual(order, ['A', 'B']);
-    pipeline.dispose();
-  });
-
   it('runs class-based systems in order', () => {
     const order: string[] = [];
 
@@ -612,18 +378,6 @@ describe('createSystems', () => {
     const pipeline = createSystems(em, [SysA, SysB]);
     pipeline();
     assert.deepEqual(order, ['A', 'B']);
-    pipeline.dispose();
-  });
-
-  it('mixes functional and class-based systems', () => {
-    const order: string[] = [];
-
-    function FuncSys() { return () => { order.push('func'); }; }
-    class ClassSys extends System { tick() { order.push('class'); } }
-
-    const pipeline = createSystems(em, [FuncSys, ClassSys]);
-    pipeline();
-    assert.deepEqual(order, ['func', 'class']);
     pipeline.dispose();
   });
 

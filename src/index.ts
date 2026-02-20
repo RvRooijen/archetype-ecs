@@ -1,14 +1,12 @@
-export { createEntityManager } from './EntityManager.js';
-export type { EntityId, ArchetypeView, EntityManager, SerializedData } from './EntityManager.js';
-export { createSystem, createSystems, System, OnAdded, OnRemoved } from './System.js';
-export type { SystemContext, FunctionalSystemConstructor, FunctionalSystem, Pipeline } from './System.js';
+export { createEntityManager, add, sub, mul, scale } from './EntityManager.js';
+export type { EntityId, ArchetypeView, EntityManager, SerializedData, FieldExpr } from './EntityManager.js';
+export { createSystems, System, OnAdded, OnRemoved } from './System.js';
+export type { Pipeline } from './System.js';
 export { profiler } from './Profiler.js';
 export type { Profiler, ProfilerEntry } from './Profiler.js';
 export { TYPED, componentSchemas, parseTypeSpec } from './ComponentRegistry.js';
 export type { ComponentDef, FieldRef, TypeSpec } from './ComponentRegistry.js';
-export { WasmArena } from './WasmArena.js';
-export { instantiateKernels, isWasmSimdAvailable } from './wasm-kernels.js';
-export type { IterateKernels } from './wasm-kernels.js';
+export { isWasmSimdAvailable } from './wasm-kernels.js';
 
 import { parseTypeSpec, componentSchemas, type ComponentDef, type FieldRef, type TypeSpec } from './ComponentRegistry.js';
 

@@ -20,7 +20,7 @@ npm i archetype-ecs
 ```
 
 ```ts
-import { createEntityManager, component } from 'archetype-ecs'
+import { createEntityManager, component, add } from 'archetype-ecs'
 
 const Position = component('Position', 'f32', ['x', 'y'])
 const Velocity = component('Velocity', 'f32', ['vx', 'vy'])
@@ -34,16 +34,9 @@ for (let i = 0; i < 10_000; i++) {
   )
 }
 
-em.forEach([Position, Velocity], (arch) => {
-  const px = arch.field(Position.x)  // Float32Array
-  const py = arch.field(Position.y)
-  const vx = arch.field(Velocity.vx)
-  const vy = arch.field(Velocity.vy)
-  for (let i = 0; i < arch.count; i++) {
-    px[i] += vx[i]
-    py[i] += vy[i]
-  }
-})
+// SIMD-accelerated — components inferred from the expression, no query needed
+em.apply(Position.x, add(Position.x, Velocity.vx))
+em.apply(Position.y, add(Position.y, Velocity.vy))
 ```
 
 ---
@@ -51,11 +44,11 @@ em.forEach([Position, Velocity], (arch) => {
 ### Why archetype-ecs?
 
 <table>
-<tr><td><strong>Fast iteration</strong></td><td>0.5 ms/frame over 1M entities with auto-detected <a href="#wasm-simd">WASM SIMD</a>. Faster than bitecs, wolf-ecs, harmony-ecs — see <a href="#benchmarks">benchmarks</a>.</td></tr>
+<tr><td><strong>Fast iteration</strong></td><td>0.29 ms/frame over 1M entities with auto-detected <a href="#wasm-simd">WASM SIMD</a>. Faster than bitecs, wolf-ecs, harmony-ecs — see <a href="#benchmarks">benchmarks</a>.</td></tr>
 <tr><td><strong>Low memory</strong></td><td>86 MB for 1M entities. Sparse-array ECS libraries use up to 2.4x more.</td></tr>
-<tr><td><strong>No allocations</strong></td><td><code>get</code>, <code>set</code>, and <code>forEach</code> don't allocate.</td></tr>
+<tr><td><strong>No allocations</strong></td><td><code>apply</code>, <code>get</code>, <code>set</code>, and <code>forEach</code> don't allocate.</td></tr>
 <tr><td><strong>Typed</strong></td><td>TypeScript generics throughout. Field names autocomplete, wrong fields don't compile.</td></tr>
-<tr><td><strong>Systems</strong></td><td>Class-based systems with <code>@OnAdded</code> / <code>@OnRemoved</code> decorators. Functional API also available.</td></tr>
+<tr><td><strong>Systems</strong></td><td>Class-based systems with <code>@OnAdded</code> / <code>@OnRemoved</code> decorators for component lifecycle hooks.</td></tr>
 </table>
 
 ---
@@ -121,27 +114,32 @@ em.getComponent(player, Position)  // { x: 0, y: 0 }
 em.getComponent(player, Name)      // { name: 'Hero', title: 'Sir' }
 ```
 
-### Queries — `forEach` vs `query`
+### Iteration — `apply`, `forEach`, and `query`
 
-Two ways to work with entities in bulk. Pick the right one for the job:
+Three ways to work with entities. Pick the right one for the job:
 
-#### `forEach` — bulk processing
+#### `apply` — bulk math, SIMD-accelerated
 
-Iterates over matching archetypes. You get the backing TypedArrays directly.
+The primary way to update fields every frame. Required components are inferred from the expression — no query needed. Runs 4x faster than a manual JS loop when WASM SIMD is available.
 
 ```ts
-function movementSystem(dt: number) {
-  em.forEach([Position, Velocity], (arch) => {
-    const px = arch.field(Position.x)  // Float32Array
-    const py = arch.field(Position.y)
-    const vx = arch.field(Velocity.vx)
-    const vy = arch.field(Velocity.vy)
-    for (let i = 0; i < arch.count; i++) {
-      px[i] += vx[i] * dt
-      py[i] += vy[i] * dt
-    }
-  })
-}
+import { add, sub, scale } from 'archetype-ecs'
+
+em.apply(Position.x, add(Position.x, Velocity.vx))   // px += vx
+em.apply(Position.y, add(Position.y, Velocity.vy))   // py += vy
+em.apply(Velocity.vx, scale(Velocity.vx, 0.99))      // friction
+```
+
+#### `forEach` — custom operations
+
+For logic that can't be expressed as simple math. You get the backing TypedArrays directly.
+
+```ts
+em.forEach([Position, Velocity], (arch) => {
+  const vy = arch.field(Velocity.vy)
+  for (let i = 0; i < arch.count; i++)
+    vy[i] = Math.max(vy[i] - 9.81 * dt, -50)   // gravity + terminal velocity
+})
 ```
 
 #### `query` — when you need entity IDs
@@ -171,32 +169,24 @@ const total = em.count([Position])
 
 #### When to use which
 
-| | `forEach` | `query` |
-|---|---|---|
-| **Use for** | Movement, physics, rendering | Damage events, UI, spawning |
-| **Runs** | Every frame | On demand |
-| **Allocates** | Nothing | `number[]` of entity IDs |
-| **Access** | TypedArrays by field | `get` / `set` by entity ID |
+| | `apply` | `forEach` | `query` |
+|---|---|---|---|
+| **Use for** | Movement, physics, rendering | Custom per-entity logic | Damage events, UI, spawning |
+| **Runs** | Every frame | Every frame | On demand |
+| **Allocates** | Nothing | Nothing | `number[]` of entity IDs |
+| **Access** | Declarative expressions | TypedArrays by field | `get` / `set` by entity ID |
 
 ### Systems
 
 Class-based systems with decorators for component lifecycle hooks:
 
 ```ts
-import { System, OnAdded, OnRemoved, createSystems, type EntityId } from 'archetype-ecs'
+import { System, OnAdded, OnRemoved, createSystems, add, type EntityId } from 'archetype-ecs'
 
 class MovementSystem extends System {
   tick() {
-    this.forEach([Position, Velocity], (arch) => {
-      const px = arch.field(Position.x)
-      const py = arch.field(Position.y)
-      const vx = arch.field(Velocity.vx)
-      const vy = arch.field(Velocity.vy)
-      for (let i = 0; i < arch.count; i++) {
-        px[i] += vx[i]
-        py[i] += vy[i]
-      }
-    })
+    this.em.apply(Position.x, add(Position.x, Velocity.vx))
+    this.em.apply(Position.y, add(Position.y, Velocity.vy))
   }
 }
 
@@ -222,20 +212,6 @@ pipeline()
 
 `@OnAdded(Health, Position)` fires when an entity has **all** specified components. `@OnRemoved(Health)` fires when any specified component is removed. Hooks are buffered and deduplicated — they fire during `pipeline()` (or `sys.run()`), after `flushHooks()` collects the pending changes.
 
-A functional API is also available:
-
-```ts
-import { createSystem } from 'archetype-ecs'
-
-const deathSystem = createSystem(em, (sys) => {
-  sys.onAdded(Health, (id) => console.log(`${id} spawned`))
-  sys.onRemoved(Health, (id) => console.log(`${id} died`))
-})
-
-em.flushHooks()
-deathSystem()
-```
-
 ### Serialize
 
 ```ts
@@ -256,43 +232,45 @@ Supports stripping components, skipping entities, and custom serializers.
 
 ### WASM SIMD
 
-When WebAssembly SIMD is available (all modern browsers and Node.js 16+), archetype-ecs automatically allocates numeric TypedArrays on a shared `WebAssembly.Memory`. This enables SIMD-accelerated batch operations like `fieldAdd()` — no manual WASM code needed.
+`em.apply` runs SIMD-accelerated bulk math — no loops, no raw arrays. Available expressions:
 
 ```ts
-em.forEach([Position, Velocity], (arch) => {
-  arch.fieldAdd(Position.x, Velocity.vx)  // px[i] += vx[i], SIMD-accelerated
-  arch.fieldAdd(Position.y, Velocity.vy)  // py[i] += vy[i], SIMD-accelerated
-})
+add(a, b)        // a[i] + b[i]
+sub(a, b)        // a[i] - b[i]
+mul(a, b)        // a[i] * b[i]
+scale(a, s)      // a[i] * s
 ```
 
-`fieldAdd(target, source)` dispatches to a `f32x4.add` SIMD kernel (4 floats per instruction) when available, and falls back to a scalar JS loop otherwise. Your system code stays identical either way — no feature detection needed.
+When WASM SIMD is available and the fields are `f32`, this runs 4x faster than a manual JS loop. Otherwise it falls back to scalar JS automatically. For operations that can't be expressed as simple math, use [`forEach`](#forEach--custom-operations).
 
-To disable WASM mode (e.g. for testing or environments without WebAssembly):
+#### When does SIMD kick in?
+
+| Condition | Check | Fallback |
+|---|---|---|
+| Runtime supports WASM SIMD | Tested once at startup by compiling a 925-byte SIMD module | All operations use scalar JS |
+| WASM mode not disabled | `createEntityManager()` (default) or `{ wasm: true }` | `createEntityManager({ wasm: false })` forces JS-only |
+| Field type is `f32` | `apply` checks if arrays are `Float32Array` | Scalar JS loop |
+
+WASM SIMD is supported in all modern browsers (Chrome 91+, Firefox 89+, Safari 16.4+) and Node.js 16+.
 
 ```ts
-const em = createEntityManager({ wasm: false })
+import { isWasmSimdAvailable } from 'archetype-ecs'
+
+isWasmSimdAvailable()                      // true if runtime supports SIMD
+createEntityManager({ wasm: false })       // force JS-only mode
 ```
 
-For advanced use cases, you can write your own WASM modules and use `fieldOffset()` + `em.wasmMemory` to operate directly on the raw memory:
+#### How SIMD acceleration works
 
-```ts
-import { instantiateKernels } from 'archetype-ecs'
+Regular JavaScript processes one float at a time. When you write `px[i] += vx[i]` on a `Float32Array`, V8 converts each value from `f32` to `f64` and back — that's the only float precision JS supports natively.
 
-const kernels = await instantiateKernels(em.wasmMemory!)
+WASM SIMD uses `f32x4.add`: a single CPU instruction that adds **4 floats in parallel**, directly in 32-bit precision. For 1M entities, that's 250K instructions instead of 1M, with no conversion overhead.
 
-em.forEach([Position, Velocity], (arch) => {
-  kernels.iterate_simd(
-    arch.fieldOffset(Position.x), arch.fieldOffset(Position.y),
-    arch.fieldOffset(Velocity.vx), arch.fieldOffset(Velocity.vy),
-    arch.count,
-  )
-})
-```
+#### Storage layout
 
-**Details:**
+When WASM mode is active, all numeric TypedArrays (`Float32Array`, `Int32Array`, etc.) are allocated on a shared `WebAssembly.Memory` via a bump allocator. This means the SIMD kernel operates directly on the data — no copying between JS and WASM. String fields always use regular JS arrays.
+
 - The arena reserves 128 MB virtual address space (lazily committed — no physical RAM cost on most OSes)
-- String fields always fall back to regular JS arrays
-- `fieldAdd` uses SIMD for `Float32Array` fields; other types fall back to scalar
 - The bump allocator doesn't reclaim memory — frequent archetype churn may waste space
 
 ---
@@ -356,13 +334,13 @@ Returns an entity manager. WASM SIMD is auto-detected and enabled by default. Pa
 | `set(id, Comp.field, value)` | Write a single field |
 | `query(include, exclude?)` | Get matching entity IDs |
 | `count(include, exclude?)` | Count matching entities |
+| `apply(target, expr)` | Set a field to an expression result — SIMD-accelerated for `f32` |
 | `forEach(include, callback, exclude?)` | Iterate archetypes with TypedArray access |
 | `onAdd(Comp, callback)` | Register callback for component additions *(deferred)* |
 | `onRemove(Comp, callback)` | Register callback for component removals *(deferred)* |
 | `flushHooks()` | Collect pending add/remove events for registered hooks |
 | `serialize(symbolToName, strip?, skip?, opts?)` | Serialize world to JSON-friendly object |
 | `deserialize(data, nameToSymbol, opts?)` | Restore world from serialized data |
-| `wasmMemory` | `WebAssembly.Memory \| null` — the underlying memory (WASM mode only) |
 
 The `forEach` callback receives an `ArchetypeView` with:
 
@@ -370,13 +348,7 @@ The `forEach` callback receives an `ArchetypeView` with:
 |---|---|
 | `field(ref)` | Get the backing TypedArray for a field |
 | `fieldStride(ref)` | Elements per entity (1 for scalars, N for arrays) |
-| `fieldOffset(ref)` | Byte offset in `wasmMemory` (-1 if not in WASM mode) |
-| `fieldAdd(target, source)` | `target[i] += source[i]` — uses SIMD in WASM mode, scalar loop otherwise |
 | `snapshot(ref)` | Get the snapshot TypedArray (change tracking) |
-
-### `instantiateKernels(memory)`
-
-Loads the built-in WASM SIMD module onto the given `WebAssembly.Memory`. Returns `{ iterate_scalar, iterate_simd }` — both take `(pxOffset, pyOffset, vxOffset, vyOffset, count)` as byte offsets.
 
 ### `System`
 
@@ -391,13 +363,9 @@ Base class for decorator-based systems.
 | `run()` | Fire buffered hook callbacks, then `tick()` |
 | `dispose()` | Unsubscribe all hooks |
 
-### `createSystem(em, constructor)`
-
-Functional alternative to class-based systems. The constructor receives a context with `onAdded`, `onRemoved`, and `forEach`, and optionally returns a tick function.
-
 ### `createSystems(em, entries)`
 
-Creates a pipeline from an array of class-based (`System` subclasses) and/or functional system constructors. Returns a callable that runs all systems in order, with a `dispose()` method.
+Creates a pipeline from an array of `System` subclasses. Returns a callable that runs all systems in order, with a `dispose()` method.
 
 ---
 
@@ -405,36 +373,27 @@ Creates a pipeline from an array of class-based (`System` subclasses) and/or fun
 
 1M entities, Position += Velocity, 5 runs (median), Node.js:
 
-| | archetype-ecs | archetype-ecs (WASM SIMD) | [bitecs](https://github.com/NateTheGreatt/bitECS) | [wolf-ecs](https://github.com/EnderShadow8/wolf-ecs) | [harmony-ecs](https://github.com/3mcd/harmony-ecs) | [miniplex](https://github.com/hmans/miniplex) |
-|---|---:|---:|---:|---:|---:|---:|
-| **Iteration** (ms/frame) | 1.5 | **0.5** | 2.2 | 2.2 | 1.8 | 32.5 |
-| **Entity creation** (ms) | 401 | 401 | 366 | **106** | 248 | 265 |
-| **Memory** (MB) | 86 | 86+128 | 204 | 60 | **31** | 166 |
+| | archetype-ecs | [bitecs](https://github.com/NateTheGreatt/bitECS) | [wolf-ecs](https://github.com/EnderShadow8/wolf-ecs) | [harmony-ecs](https://github.com/3mcd/harmony-ecs) | [miniplex](https://github.com/hmans/miniplex) |
+|---|---:|---:|---:|---:|---:|
+| **Iteration** — `apply()` (ms/frame) | **0.29** | 1.6 | 1.4 | 1.1 | 28.9 |
+| **Iteration** — `field()` + loop (ms/frame) | 1.2 | — | — | — | — |
+| **Entity creation** (ms) | 501 | 359 | **105** | 255 | 157 |
+| **Memory** (MB) | 86+128 | 204 | 60 | **31** | 166 |
 
-Each library runs the same test — iterate 1M entities over 500 frames:
+Each library iterates 1M entities over 500 frames (`Position += Velocity`):
 
 ```ts
-// archetype-ecs (default) — manual loop
-em.forEach([Position, Velocity], (arch) => {
-  const px = arch.field(Position.x)   // Float32Array, dense
-  const py = arch.field(Position.y)
-  const vx = arch.field(Velocity.vx)
-  const vy = arch.field(Velocity.vy)
-  for (let i = 0; i < arch.count; i++) {
-    px[i] += vx[i]
-    py[i] += vy[i]
-  }
-})
+// apply() — declarative, SIMD-accelerated
+em.apply(Position.x, add(Position.x, Velocity.vx))
+em.apply(Position.y, add(Position.y, Velocity.vy))
 
-// archetype-ecs (WASM SIMD) — same code, 2.5x faster
-const em = createEntityManager({ wasm: true })
+// forEach + field() — manual loop for custom operations
 em.forEach([Position, Velocity], (arch) => {
-  arch.fieldAdd(Position.x, Velocity.vx)
-  arch.fieldAdd(Position.y, Velocity.vy)
+  const vy = arch.field(Velocity.vy)
+  for (let i = 0; i < arch.count; i++)
+    vy[i] = Math.max(vy[i] - 9.81 * dt, -50)
 })
 ```
-
-The WASM SIMD kernel processes 4 floats per instruction (`f32x4.add`) and avoids V8's `f32→f64→f32` conversion overhead.
 
 Run them yourself:
 
@@ -453,7 +412,7 @@ Compared against other JS ECS libraries:
 
 | Feature | archetype-ecs | bitecs | wolf-ecs | harmony-ecs | miniplex |
 |---|:---:|:---:|:---:|:---:|:---:|
-| WASM SIMD iteration (opt-in) | ✓ | — | — | — | — |
+| WASM SIMD iteration (auto-detected) | ✓ | — | — | — | — |
 | String SoA storage | ✓ | — | — | — | — |
 | Mixed string + numeric components | ✓ | — | — | — | — |
 | `forEach` with dense TypedArray field access | ✓ | — | — | — | — |
@@ -471,7 +430,7 @@ Compared against other JS ECS libraries:
 | TypeScript type inference | ✓ | — | ✓ | ✓ | ✓✓ |
 | Batch entity creation | ✓ | — | — | ✓ | ✓ |
 | Zero-alloc per-entity access | ✓ | ✓ | ✓ | ✓ | — |
-| System framework (class + functional) | ✓ | — | — | — | — |
+| System framework (class-based) | ✓ | — | — | — | — |
 | Component lifecycle hooks | ✓ | — | — | — | ✓ |
 | Relations / hierarchies | — | ✓ | — | — | — |
 | React integration | — | — | — | — | ✓ |
