@@ -897,4 +897,62 @@ describe('apply()', () => {
       assert.equal(px[0], 14);
     });
   });
+
+  it('filter.with restricts apply to entities with additional components', () => {
+    const Vel = component('FilterWithVel', 'f32', ['vx']);
+    const em2 = createEntityManager();
+
+    const moving = em2.createEntity();
+    em2.addComponent(moving, Pos, { x: 10, y: 0 });
+    em2.addComponent(moving, Vel, { vx: 1 });
+
+    const still = em2.createEntity();
+    em2.addComponent(still, Pos, { x: 10, y: 0 });
+
+    em2.apply(Pos.x, scale(Pos.x, 2), { with: [Vel] });
+
+    assert.equal(em2.get(moving, Pos.x), 20); // has Vel — affected
+    assert.equal(em2.get(still,  Pos.x), 10); // no Vel  — skipped
+  });
+
+  it('filter.without skips entities with excluded components', () => {
+    const Frozen = component('FilterWithoutFrozen', 'f32', ['v']);
+    const em2 = createEntityManager();
+
+    const active = em2.createEntity();
+    em2.addComponent(active, Pos, { x: 10, y: 0 });
+
+    const frozen = em2.createEntity();
+    em2.addComponent(frozen, Pos, { x: 10, y: 0 });
+    em2.addComponent(frozen, Frozen, { v: 0 });
+
+    em2.apply(Pos.x, scale(Pos.x, 2), { without: [Frozen] });
+
+    assert.equal(em2.get(active, Pos.x), 20); // no Frozen — affected
+    assert.equal(em2.get(frozen, Pos.x), 10); // has Frozen — skipped
+  });
+
+  it('filter.with and filter.without can be combined', () => {
+    const Vel    = component('FilterBothVel',    'f32', ['vx']);
+    const Frozen = component('FilterBothFrozen', 'f32', ['v']);
+    const em2 = createEntityManager();
+
+    const target = em2.createEntity(); // Pos + Vel, no Frozen → affected
+    em2.addComponent(target, Pos, { x: 10, y: 0 });
+    em2.addComponent(target, Vel, { vx: 1 });
+
+    const noVel = em2.createEntity(); // Pos only → skipped (missing Vel)
+    em2.addComponent(noVel, Pos, { x: 10, y: 0 });
+
+    const frozenMoving = em2.createEntity(); // Pos + Vel + Frozen → skipped (excluded)
+    em2.addComponent(frozenMoving, Pos,    { x: 10, y: 0 });
+    em2.addComponent(frozenMoving, Vel,    { vx: 1 });
+    em2.addComponent(frozenMoving, Frozen, { v: 0 });
+
+    em2.apply(Pos.x, scale(Pos.x, 2), { with: [Vel], without: [Frozen] });
+
+    assert.equal(em2.get(target,       Pos.x), 20); // affected
+    assert.equal(em2.get(noVel,        Pos.x), 10); // skipped — no Vel
+    assert.equal(em2.get(frozenMoving, Pos.x), 10); // skipped — has Frozen
+  });
 });
