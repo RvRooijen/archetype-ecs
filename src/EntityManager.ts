@@ -1,4 +1,6 @@
 import { TYPED, componentSchemas, toSym, type ComponentDef, type TypeSpec, type FieldRef } from './ComponentRegistry.js';
+import { WasmArena, type NumericTypedArrayConstructor } from './WasmArena.js';
+import { instantiateKernelsSync, isWasmSimdAvailable, type IterateKernels } from './wasm-kernels.js';
 
 export type { FieldRef } from './ComponentRegistry.js';
 
@@ -15,6 +17,8 @@ export interface ArchetypeView {
   readonly snapshotCount: number;
   field(ref: FieldRef): any;
   fieldStride(ref: FieldRef): number;
+  fieldOffset(ref: FieldRef): number;
+  fieldAdd(target: FieldRef, source: FieldRef): void;
   snapshot(ref: FieldRef): any;
 }
 
@@ -58,6 +62,7 @@ export interface EntityManager {
     nameToSymbol: Record<string, ComponentDef>,
     options?: { deserializers?: Map<string, (data: unknown) => unknown> }
   ): void;
+  readonly wasmMemory: WebAssembly.Memory | null;
 }
 
 // ── Internal types ───────────────────────────────────────
@@ -159,34 +164,44 @@ function unpackSpec(spec: TypeSpec): [{ new(len: number): SoAArrayValue }, numbe
   return [spec, 0];
 }
 
-function createSoAStore(schema: Record<string, TypeSpec>, capacity: number): SoAStore {
+function createSoAStore(schema: Record<string, TypeSpec>, capacity: number, arena?: WasmArena): SoAStore {
   const fields: Record<string, SoAArrayValue> = {};
   const arraySizes: Record<string, number> = {};
   for (const [field, spec] of Object.entries(schema)) {
     const [Ctor, size] = unpackSpec(spec);
-    if (size > 0) {
-      fields[field] = new Ctor(capacity * size);
-      arraySizes[field] = size;
+    const count = size > 0 ? capacity * size : capacity;
+    if (size > 0) arraySizes[field] = size;
+    if (arena && Ctor !== Array) {
+      const NumCtor = Ctor as unknown as NumericTypedArrayConstructor;
+      const offset = arena.alloc(count * NumCtor.BYTES_PER_ELEMENT);
+      arena.createView(NumCtor, offset, count, fields, field);
     } else {
-      fields[field] = new Ctor(capacity);
+      fields[field] = new Ctor(count);
     }
   }
   return { [TYPED]: true, _schema: schema, _capacity: capacity, _arraySizes: arraySizes, _fields: fields };
 }
 
-function growSoAStore(store: SoAStore, newCapacity: number): void {
+function growSoAStore(store: SoAStore, newCapacity: number, arena?: WasmArena): void {
   store._capacity = newCapacity;
   for (const [field, spec] of Object.entries(store._schema)) {
     const [Ctor, size] = unpackSpec(spec);
     const old = store._fields[field];
     const allocSize = size > 0 ? newCapacity * size : newCapacity;
-    const grown = new Ctor(allocSize);
-    if (Ctor === Array) {
-      for (let i = 0; i < old.length; i++) (grown as unknown[])[i] = (old as unknown[])[i];
+    if (arena && Ctor !== Array) {
+      const NumCtor = Ctor as unknown as NumericTypedArrayConstructor;
+      const offset = arena.alloc(allocSize * NumCtor.BYTES_PER_ELEMENT);
+      arena.updateView(store._fields, field, offset, NumCtor, allocSize);
+      (store._fields[field] as Exclude<SoAArrayValue, unknown[]>).set(old as Exclude<SoAArrayValue, unknown[]>);
     } else {
-      (grown as Exclude<SoAArrayValue, unknown[]>).set(old as Exclude<SoAArrayValue, unknown[]>);
+      const grown = new Ctor(allocSize);
+      if (Ctor === Array) {
+        for (let i = 0; i < old.length; i++) (grown as unknown[])[i] = (old as unknown[])[i];
+      } else {
+        (grown as Exclude<SoAArrayValue, unknown[]>).set(old as Exclude<SoAArrayValue, unknown[]>);
+      }
+      store._fields[field] = grown;
     }
-    store._fields[field] = grown;
   }
 }
 
@@ -256,32 +271,51 @@ function soaSwap(store: SoAStore, idxA: number, idxB: number): void {
   }
 }
 
-function createSnapshotStore(schema: Record<string, TypeSpec>, capacity: number): SnapshotStore {
+function createSnapshotStore(schema: Record<string, TypeSpec>, capacity: number, arena?: WasmArena): SnapshotStore {
   const snap: SnapshotStore = {};
   for (const [field, spec] of Object.entries(schema)) {
     const [Ctor, size] = unpackSpec(spec);
-    snap[field] = new Ctor(size > 0 ? capacity * size : capacity);
+    const count = size > 0 ? capacity * size : capacity;
+    if (arena && Ctor !== Array) {
+      const NumCtor = Ctor as unknown as NumericTypedArrayConstructor;
+      const offset = arena.alloc(count * NumCtor.BYTES_PER_ELEMENT);
+      arena.createView(NumCtor, offset, count, snap, field);
+    } else {
+      snap[field] = new Ctor(count);
+    }
   }
   return snap;
 }
 
-function growSnapshotStore(snap: SnapshotStore, schema: Record<string, TypeSpec>, newCapacity: number): void {
+function growSnapshotStore(snap: SnapshotStore, schema: Record<string, TypeSpec>, newCapacity: number, arena?: WasmArena): void {
   for (const [field, spec] of Object.entries(schema)) {
     const [Ctor, size] = unpackSpec(spec);
     const old = snap[field];
-    const grown = new Ctor(size > 0 ? newCapacity * size : newCapacity);
-    if (Ctor === Array) {
-      for (let i = 0; i < old.length; i++) (grown as unknown[])[i] = (old as unknown[])[i];
+    const allocSize = size > 0 ? newCapacity * size : newCapacity;
+    if (arena && Ctor !== Array) {
+      const NumCtor = Ctor as unknown as NumericTypedArrayConstructor;
+      const offset = arena.alloc(allocSize * NumCtor.BYTES_PER_ELEMENT);
+      arena.updateView(snap, field, offset, NumCtor, allocSize);
+      (snap[field] as Exclude<SoAArrayValue, unknown[]>).set(old as Exclude<SoAArrayValue, unknown[]>);
     } else {
-      (grown as Exclude<SoAArrayValue, unknown[]>).set(old as Exclude<SoAArrayValue, unknown[]>);
+      const grown = new Ctor(allocSize);
+      if (Ctor === Array) {
+        for (let i = 0; i < old.length; i++) (grown as unknown[])[i] = (old as unknown[])[i];
+      } else {
+        (grown as Exclude<SoAArrayValue, unknown[]>).set(old as Exclude<SoAArrayValue, unknown[]>);
+      }
+      snap[field] = grown;
     }
-    snap[field] = grown;
   }
 }
 
 // ── Entity Manager ───────────────────────────────────────
 
-export function createEntityManager(): EntityManager {
+export function createEntityManager(options?: { wasm?: boolean }): EntityManager {
+  const useWasm = options?.wasm ?? isWasmSimdAvailable();
+  const arena = useWasm ? new WasmArena() : undefined;
+  const kernels: IterateKernels | null = arena ? instantiateKernelsSync(arena.memory) : null;
+
   let nextId: EntityId = 1;
   let nextArchId = 1;
   const allEntityIds = new Set<EntityId>();
@@ -352,10 +386,10 @@ export function createEntityManager(): EntityManager {
       };
       for (const t of types) {
         const schema = componentSchemas.get(t);
-        const store = schema ? createSoAStore(schema, INITIAL_CAPACITY) : null;
+        const store = schema ? createSoAStore(schema, INITIAL_CAPACITY, arena) : null;
         arch.components.set(t, store);
         if (tracked && store) {
-          arch.snapshots!.set(t, createSnapshotStore(schema!, INITIAL_CAPACITY));
+          arch.snapshots!.set(t, createSnapshotStore(schema!, INITIAL_CAPACITY, arena));
         }
       }
       archetypes.set(key, arch);
@@ -371,10 +405,10 @@ export function createEntityManager(): EntityManager {
     arch.capacity = newCap;
     for (const [type, store] of arch.components) {
       if (store) {
-        growSoAStore(store, newCap);
+        growSoAStore(store, newCap, arena);
         if (arch.snapshots) {
           const snap = arch.snapshots.get(type);
-          if (snap) growSnapshotStore(snap, store._schema, newCap);
+          if (snap) growSnapshotStore(snap, store._schema, newCap, arena);
         }
       }
     }
@@ -561,6 +595,8 @@ export function createEntityManager(): EntityManager {
   }
 
   return {
+    wasmMemory: arena ? arena.memory : null,
+
     createEntity(): EntityId {
       const id = nextId++;
       allEntityIds.add(id);
@@ -734,6 +770,28 @@ export function createEntityManager(): EntityManager {
               if (!store) return 1;
               return store._arraySizes[ref._field] || 1;
             },
+            fieldOffset(ref: FieldRef) {
+              if (!arena) return -1;
+              const store = arch.components.get(ref._sym);
+              if (!store) return -1;
+              const arr = store._fields[ref._field];
+              if (!arr || arr instanceof Array) return -1;
+              return (arr as Exclude<SoAArrayValue, unknown[]>).byteOffset;
+            },
+            fieldAdd(target: FieldRef, source: FieldRef) {
+              const tStore = arch.components.get(target._sym);
+              const sStore = arch.components.get(source._sym);
+              if (!tStore || !sStore) return;
+              const dst = tStore._fields[target._field];
+              const src = sStore._fields[source._field];
+              const stride = tStore._arraySizes[target._field] || 1;
+              const n = arch.count * stride;
+              if (kernels && dst instanceof Float32Array && src instanceof Float32Array) {
+                kernels.add_f32(dst.byteOffset, src.byteOffset, n);
+              } else {
+                for (let i = 0; i < n; i++) (dst as never[])[i] = ((dst as never[])[i] as number + ((src as never[])[i] as number)) as never;
+              }
+            },
             snapshot(ref: FieldRef) {
               if (!snaps) return undefined;
               const snap = snaps.get(ref._sym);
@@ -765,7 +823,7 @@ export function createEntityManager(): EntityManager {
           arch.snapshotCount = 0;
           for (const [t, store] of arch.components) {
             if (store) {
-              arch.snapshots.set(t, createSnapshotStore(store._schema, arch.capacity));
+              arch.snapshots.set(t, createSnapshotStore(store._schema, arch.capacity, arena));
             }
           }
           trackedArchetypes.push(arch);

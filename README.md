@@ -51,7 +51,7 @@ em.forEach([Position, Velocity], (arch) => {
 ### Why archetype-ecs?
 
 <table>
-<tr><td><strong>Fast iteration</strong></td><td>1.7 ms/frame over 1M entities. Faster than bitecs, wolf-ecs, harmony-ecs — see <a href="#benchmarks">benchmarks</a>.</td></tr>
+<tr><td><strong>Fast iteration</strong></td><td>0.5 ms/frame over 1M entities with auto-detected <a href="#wasm-simd">WASM SIMD</a>. Faster than bitecs, wolf-ecs, harmony-ecs — see <a href="#benchmarks">benchmarks</a>.</td></tr>
 <tr><td><strong>Low memory</strong></td><td>86 MB for 1M entities. Sparse-array ECS libraries use up to 2.4x more.</td></tr>
 <tr><td><strong>No allocations</strong></td><td><code>get</code>, <code>set</code>, and <code>forEach</code> don't allocate.</td></tr>
 <tr><td><strong>Typed</strong></td><td>TypeScript generics throughout. Field names autocomplete, wrong fields don't compile.</td></tr>
@@ -254,6 +254,47 @@ em.deserialize(JSON.parse(json), { Position, Velocity, Health })
 
 Supports stripping components, skipping entities, and custom serializers.
 
+### WASM SIMD
+
+When WebAssembly SIMD is available (all modern browsers and Node.js 16+), archetype-ecs automatically allocates numeric TypedArrays on a shared `WebAssembly.Memory`. This enables SIMD-accelerated batch operations like `fieldAdd()` — no manual WASM code needed.
+
+```ts
+em.forEach([Position, Velocity], (arch) => {
+  arch.fieldAdd(Position.x, Velocity.vx)  // px[i] += vx[i], SIMD-accelerated
+  arch.fieldAdd(Position.y, Velocity.vy)  // py[i] += vy[i], SIMD-accelerated
+})
+```
+
+`fieldAdd(target, source)` dispatches to a `f32x4.add` SIMD kernel (4 floats per instruction) when available, and falls back to a scalar JS loop otherwise. Your system code stays identical either way — no feature detection needed.
+
+To disable WASM mode (e.g. for testing or environments without WebAssembly):
+
+```ts
+const em = createEntityManager({ wasm: false })
+```
+
+For advanced use cases, you can write your own WASM modules and use `fieldOffset()` + `em.wasmMemory` to operate directly on the raw memory:
+
+```ts
+import { instantiateKernels } from 'archetype-ecs'
+
+const kernels = await instantiateKernels(em.wasmMemory!)
+
+em.forEach([Position, Velocity], (arch) => {
+  kernels.iterate_simd(
+    arch.fieldOffset(Position.x), arch.fieldOffset(Position.y),
+    arch.fieldOffset(Velocity.vx), arch.fieldOffset(Velocity.vy),
+    arch.count,
+  )
+})
+```
+
+**Details:**
+- The arena reserves 128 MB virtual address space (lazily committed — no physical RAM cost on most OSes)
+- String fields always fall back to regular JS arrays
+- `fieldAdd` uses SIMD for `Float32Array` fields; other types fall back to scalar
+- The bump allocator doesn't reclaim memory — frequent archetype churn may waste space
+
 ---
 
 ## TypeScript
@@ -298,9 +339,9 @@ Schema component with mixed field types.
 const Item = component('Item', { name: 'string', weight: 'f32', armor: 'u8' })
 ```
 
-### `createEntityManager()`
+### `createEntityManager(options?)`
 
-Returns an entity manager with the following methods:
+Returns an entity manager. WASM SIMD is auto-detected and enabled by default. Pass `{ wasm: false }` to force JS-only mode.
 
 | Method | Description |
 |---|---|
@@ -321,6 +362,21 @@ Returns an entity manager with the following methods:
 | `flushHooks()` | Collect pending add/remove events for registered hooks |
 | `serialize(symbolToName, strip?, skip?, opts?)` | Serialize world to JSON-friendly object |
 | `deserialize(data, nameToSymbol, opts?)` | Restore world from serialized data |
+| `wasmMemory` | `WebAssembly.Memory \| null` — the underlying memory (WASM mode only) |
+
+The `forEach` callback receives an `ArchetypeView` with:
+
+| Method | Description |
+|---|---|
+| `field(ref)` | Get the backing TypedArray for a field |
+| `fieldStride(ref)` | Elements per entity (1 for scalars, N for arrays) |
+| `fieldOffset(ref)` | Byte offset in `wasmMemory` (-1 if not in WASM mode) |
+| `fieldAdd(target, source)` | `target[i] += source[i]` — uses SIMD in WASM mode, scalar loop otherwise |
+| `snapshot(ref)` | Get the snapshot TypedArray (change tracking) |
+
+### `instantiateKernels(memory)`
+
+Loads the built-in WASM SIMD module onto the given `WebAssembly.Memory`. Returns `{ iterate_scalar, iterate_simd }` — both take `(pxOffset, pyOffset, vxOffset, vyOffset, count)` as byte offsets.
 
 ### `System`
 
@@ -349,16 +405,16 @@ Creates a pipeline from an array of class-based (`System` subclasses) and/or fun
 
 1M entities, Position += Velocity, 5 runs (median), Node.js:
 
-| | archetype-ecs | [bitecs](https://github.com/NateTheGreatt/bitECS) | [wolf-ecs](https://github.com/EnderShadow8/wolf-ecs) | [harmony-ecs](https://github.com/3mcd/harmony-ecs) | [miniplex](https://github.com/hmans/miniplex) |
-|---|---:|---:|---:|---:|---:|
-| **Iteration** (ms/frame) | **1.7** | 2.2 | 2.2 | 1.8 | 32.5 |
-| **Entity creation** (ms) | 401 | 366 | **106** | 248 | 265 |
-| **Memory** (MB) | 86 | 204 | 60 | **31** | 166 |
+| | archetype-ecs | archetype-ecs (WASM SIMD) | [bitecs](https://github.com/NateTheGreatt/bitECS) | [wolf-ecs](https://github.com/EnderShadow8/wolf-ecs) | [harmony-ecs](https://github.com/3mcd/harmony-ecs) | [miniplex](https://github.com/hmans/miniplex) |
+|---|---:|---:|---:|---:|---:|---:|
+| **Iteration** (ms/frame) | 1.5 | **0.5** | 2.2 | 2.2 | 1.8 | 32.5 |
+| **Entity creation** (ms) | 401 | 401 | 366 | **106** | 248 | 265 |
+| **Memory** (MB) | 86 | 86+128 | 204 | 60 | **31** | 166 |
 
 Each library runs the same test — iterate 1M entities over 500 frames:
 
 ```ts
-// archetype-ecs
+// archetype-ecs (default) — manual loop
 em.forEach([Position, Velocity], (arch) => {
   const px = arch.field(Position.x)   // Float32Array, dense
   const py = arch.field(Position.y)
@@ -369,14 +425,22 @@ em.forEach([Position, Velocity], (arch) => {
     py[i] += vy[i]
   }
 })
+
+// archetype-ecs (WASM SIMD) — same code, 2.5x faster
+const em = createEntityManager({ wasm: true })
+em.forEach([Position, Velocity], (arch) => {
+  arch.fieldAdd(Position.x, Velocity.vx)
+  arch.fieldAdd(Position.y, Velocity.vy)
+})
 ```
 
-archetype-ecs is fastest at iteration. Harmony-ecs and wolf-ecs are close; miniplex is ~20x slower due to object-based storage.
+The WASM SIMD kernel processes 4 floats per instruction (`f32x4.add`) and avoids V8's `f32→f64→f32` conversion overhead.
 
 Run them yourself:
 
 ```bash
-npm run bench
+npm run bench                                            # vs other ECS libraries
+node --expose-gc bench/wasm-iteration-bench.js           # WASM SIMD benchmark
 ```
 
 ---
@@ -389,6 +453,7 @@ Compared against other JS ECS libraries:
 
 | Feature | archetype-ecs | bitecs | wolf-ecs | harmony-ecs | miniplex |
 |---|:---:|:---:|:---:|:---:|:---:|
+| WASM SIMD iteration (opt-in) | ✓ | — | — | — | — |
 | String SoA storage | ✓ | — | — | — | — |
 | Mixed string + numeric components | ✓ | — | — | — | — |
 | `forEach` with dense TypedArray field access | ✓ | — | — | — | — |

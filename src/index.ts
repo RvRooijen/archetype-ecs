@@ -6,6 +6,9 @@ export { profiler } from './Profiler.js';
 export type { Profiler, ProfilerEntry } from './Profiler.js';
 export { TYPED, componentSchemas, parseTypeSpec } from './ComponentRegistry.js';
 export type { ComponentDef, FieldRef, TypeSpec } from './ComponentRegistry.js';
+export { WasmArena } from './WasmArena.js';
+export { instantiateKernels, isWasmSimdAvailable } from './wasm-kernels.js';
+export type { IterateKernels } from './wasm-kernels.js';
 
 import { parseTypeSpec, componentSchemas, type ComponentDef, type FieldRef, type TypeSpec } from './ComponentRegistry.js';
 
