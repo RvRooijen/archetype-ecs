@@ -13,9 +13,9 @@ export interface ArchetypeView {
   readonly count: number;
   readonly snapshotEntityIds: EntityId[] | null;
   readonly snapshotCount: number;
-  field(ref: FieldRef): SoAArrayValue | undefined;
+  field(ref: FieldRef): any;
   fieldStride(ref: FieldRef): number;
-  snapshot(ref: FieldRef): SoAArrayValue | undefined;
+  snapshot(ref: FieldRef): any;
 }
 
 export interface SerializedData {
