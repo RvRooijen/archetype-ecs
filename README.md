@@ -129,9 +129,9 @@ em.apply(Position.x, add(Position.x, random(-1, 1)))   // px += random(-1, 1)
 em.apply(Position.x, random(0, 800))                   // scatter to random positions
 ```
 
-#### `forEach` — when you need entity IDs or conditional logic
+#### `forEach` — batch processing with TypedArray access
 
-For logic that reads entity IDs, branches per entity, or triggers structural changes. You get the backing TypedArrays and the entity ID list directly.
+For per-entity logic that needs both raw field data and entity IDs. You get the backing TypedArrays and entity ID list together, archetype by archetype.
 
 ```ts
 // mark entities with no health as dead — needs entity IDs + conditional branch
@@ -144,9 +144,9 @@ em.forEach([Health], (arch) => {
 })
 ```
 
-#### `query` — when you need entity IDs
+#### `query` — cross-entity lookups, excludes, counting
 
-Returns entity IDs for when you need to target specific entities.
+Returns a flat list of entity IDs. Use when you need to relate entities to each other, filter with excludes, or just count matches.
 
 ```ts
 // Find the closest enemy to the player
@@ -173,10 +173,10 @@ const total = em.count([Position])
 
 | | `apply` | `forEach` | `query` |
 |---|---|---|---|
-| **Use for** | Movement, physics, rendering | Custom per-entity logic | Damage events, UI, spawning |
+| **Use for** | Bulk math, no branching | Conditionals, structural changes | Cross-entity lookups, excludes, counting |
 | **Runs** | Every frame | Every frame | On demand |
 | **Allocates** | Nothing | Nothing | `number[]` of entity IDs |
-| **Access** | Declarative expressions | TypedArrays by field | `get` / `set` by entity ID |
+| **Access** | Declarative expressions | TypedArrays + entity IDs per archetype | `get` / `set` by entity ID |
 
 ### Systems
 
