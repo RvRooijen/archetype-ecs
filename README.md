@@ -117,13 +117,13 @@ Three ways to work with entities. Pick the right one for the job:
 
 #### `apply` — bulk math, SIMD-accelerated
 
-The primary way to update fields every frame. Required components are inferred from the expression — no query needed. Runs 4x faster than a manual JS loop when WASM SIMD is available.
+The primary way to update fields every frame. Required components are inferred from the expression — no query needed.
 
 ```ts
 import { add, sub, scale, random } from 'archetype-ecs'
 
-em.apply(Position.x, add(Position.x, Velocity.vx))     // px += vx
-em.apply(Position.y, add(Position.y, Velocity.vy))     // py += vy
+em.apply(Position.x, add(Position.x, Velocity.vx))     // ~0.3 ms / 1M entities
+em.apply(Position.y, add(Position.y, Velocity.vy))     // ~0.3 ms / 1M entities
 em.apply(Velocity.vx, scale(Velocity.vx, 0.99))        // friction
 em.apply(Position.x, add(Position.x, random(-1, 1)))   // px += random(-1, 1)
 em.apply(Position.x, random(0, 800))                   // scatter to random positions
@@ -135,7 +135,7 @@ For per-entity logic that needs both raw field data and entity IDs. You get the 
 
 ```ts
 // mark entities with no health as dead — needs entity IDs + conditional branch
-em.forEach([Health], (arch) => {
+em.forEach([Health], (arch) => {                 // ~2.8 ms / 1M entities (JS loop)
   const hp = arch.field(Health.hp)
   const ids = arch.entityIds
   for (let i = 0; i < arch.count; i++) {
@@ -150,7 +150,7 @@ Returns a flat list of entity IDs. Use when you need to relate entities to each 
 
 ```ts
 // Find the closest enemy to the player
-const enemies = em.query([Position, Enemy])
+const enemies = em.query([Position, Enemy])         // allocates number[] — avoid per-frame for large sets
 let closest = -1, minDist = Infinity
 for (const id of enemies) {
   const dx = em.get(id, Position.x) - playerX
