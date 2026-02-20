@@ -60,7 +60,7 @@ export interface EntityManager {
   createEntityWith(...args: unknown[]): EntityId;
   count(include: ComponentDef[], exclude?: ComponentDef[]): number;
   forEach(include: ComponentDef[], callback: (view: ArchetypeView) => void, exclude?: ComponentDef[]): void;
-  apply(target: FieldRef, expr: FieldExpr): void;
+  apply(target: FieldRef, expr: FieldExpr, filter?: { with?: ComponentDef[], without?: ComponentDef[] }): void;
   onAdd(type: ComponentDef, callback: (entityId: EntityId) => void): () => void;
   onRemove(type: ComponentDef, callback: (entityId: EntityId) => void): () => void;
   flushHooks(): void;
@@ -809,15 +809,15 @@ export function createEntityManager(options?: { wasm?: boolean }): EntityManager
       }
     },
 
-    apply(target: FieldRef, expr: FieldExpr): void {
+    apply(target: FieldRef, expr: FieldExpr, filter?: { with?: ComponentDef[], without?: ComponentDef[] }): void {
       // Collect required component symbols — RandomExpr operands have no _sym
       const syms = new Set<symbol>([target._sym]);
       if ('a' in expr) syms.add(expr.a._sym);
       if ('b' in expr && '_sym' in expr.b) syms.add((expr.b as FieldRef)._sym);
 
-      // Find matching archetypes
-      const types = [...syms].map(s => ({ _sym: s }) as ComponentDef);
-      const matching = getMatchingArchetypes(types);
+      // Find matching archetypes, optionally narrowed by extra with/without filters
+      const types = [...syms].map(s => ({ _sym: s }) as ComponentDef).concat(filter?.with ?? []);
+      const matching = getMatchingArchetypes(types, filter?.without);
 
       for (let a = 0; a < matching.length; a++) {
         const arch = matching[a];
