@@ -32,9 +32,8 @@ for (let i = 0; i < 10_000; i++) {
   em.createEntityWith(Position, { x: Math.random() * 800, y: Math.random() * 600 })
 }
 
-// 1M entities: ~0.6 ms/frame
-em.apply(Position.x, add(Position.x, random(-0.5, 0.5)))
-em.apply(Position.y, add(Position.y, random(-0.5, 0.5)))
+em.apply(Position.x, add(Position.x, random(-0.5, 0.5)))  // ~0.3 ms base + ~0.3 ms random
+em.apply(Position.y, add(Position.y, random(-0.5, 0.5)))  // 1M entities each
 ```
 
 ---
