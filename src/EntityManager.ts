@@ -1,11 +1,7 @@
-import { TYPED, componentSchemas, toSym, type ComponentDef, type TypeSpec } from './ComponentRegistry.js';
+import { TYPED, componentSchemas, toSym, type ComponentDef, type TypeSpec, type FieldRef } from './ComponentRegistry.js';
+export type { FieldRef } from './ComponentRegistry.js';
 
 export type EntityId = number;
-
-export interface FieldRef {
-  readonly _sym: symbol;
-  readonly _field: string;
-}
 
 export interface ArchetypeView {
   readonly id: number;

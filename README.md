@@ -261,7 +261,7 @@ Supports stripping components, skipping entities, and custom serializers.
 Component types are inferred from their definition. Field names autocomplete, wrong fields are compile errors.
 
 ```ts
-// Fields are typed as FieldRef — Position becomes ComponentDef & { x: FieldRef; y: FieldRef }
+// Schema is inferred — Position becomes ComponentDef<{ x: 'f32'; y: 'f32' }>
 const Position = component('Position', 'f32', ['x', 'y'])
 
 Position.x                // FieldRef — autocompletes to .x and .y

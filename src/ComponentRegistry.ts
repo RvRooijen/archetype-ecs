@@ -34,11 +34,15 @@ export function parseTypeSpec(typeStr: string): TypeSpec {
 
 export const componentSchemas = new Map<symbol, Record<string, TypeSpec>>();
 
-export interface ComponentDef {
+export interface FieldRef {
+  readonly _sym: symbol;
+  readonly _field: string;
+}
+
+export type ComponentDef<S extends Record<string, string> = {}> = {
   readonly _sym: symbol;
   readonly _name: string;
-  [key: string]: unknown;
-}
+} & { readonly [K in keyof S]: FieldRef };
 
 export function toSym(type: ComponentDef | symbol): symbol {
   return (type as ComponentDef)._sym || (type as symbol);
