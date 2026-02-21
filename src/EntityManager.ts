@@ -42,7 +42,7 @@ export interface EntityManager {
   addComponent(entityId: EntityId, type: ComponentDef, data?: ComponentData): void;
   removeComponent(entityId: EntityId, type: ComponentDef): void;
   getComponent(entityId: EntityId, type: ComponentDef): Record<string, number | string | number[]> | undefined;
-  get<T extends number | string>(entityId: EntityId, fieldRef: FieldRef<T>): T | undefined;
+  get<T extends number | string>(entityId: EntityId, fieldRef: FieldRef<T>): T;
   set(entityId: EntityId, fieldRef: FieldRef, value: number | string | ArrayLike<number>): void;
   hasComponent(entityId: EntityId, type: ComponentDef): boolean;
   query(include: ComponentDef[], exclude?: ComponentDef[]): EntityId[];
@@ -664,7 +664,7 @@ export function createEntityManager(options?: { wasm?: boolean }): EntityManager
       return undefined;
     },
 
-    get<T extends number | string>(entityId: EntityId, fieldRef: FieldRef<T>): T | undefined {
+    get<T extends number | string>(entityId: EntityId, fieldRef: FieldRef<T>): T {
       const arch = entityArchetype.get(entityId);
       if (arch) {
         const store = arch.components.get(fieldRef._sym);
@@ -684,7 +684,7 @@ export function createEntityManager(options?: { wasm?: boolean }): EntityManager
         const compData = removed.get(fieldRef._sym);
         if (compData) return compData[fieldRef._field] as T;
       }
-      return undefined;
+      return undefined as unknown as T;
     },
 
     set(entityId: EntityId, fieldRef: FieldRef, value: number | string | ArrayLike<number>): void {
