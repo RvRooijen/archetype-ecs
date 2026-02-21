@@ -25,7 +25,7 @@ npm i archetype-ecs
 
 In OOP, a `Player` has a `move()` method, an `Enemy` has its own `move()`, and sooner or later you're wrestling with inheritance just to share logic. In ECS there are no types — just entities (IDs) with components (data) attached. A `MovementSystem` runs on every entity that has a `Position` and `Velocity`, whether it's a player, enemy, or barrel. Behaviour comes from combining components, not from hierarchies.
 
-This also maps well onto functional thinking: systems are transforms over data, with no hidden state. The difference is ECS mutates in place — all positions live in one contiguous `Float32Array`, and the movement system writes directly into it. That's where the performance comes from. In a class-based loop, 10,000 enemies are 10,000 heap objects with 10,000 pointer chases. Here they're one tight array walk the CPU can prefetch.
+This also means the data layout can be optimised independently of the logic. All positions live in one contiguous `Float32Array`, and the movement system writes directly into it. In a class-based loop, 10,000 enemies are 10,000 heap objects with 10,000 pointer chases. Here they're one tight array walk the CPU can prefetch.
 
 **Why this library specifically** — SIMD-accelerated bulk updates (~7× over plain JS), zero allocations in hot paths, TypeScript types that flow from definition to `get()` without casting, string component support, ~5 KB gzip.
 
