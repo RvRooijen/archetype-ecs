@@ -51,6 +51,15 @@ Two reasons: **composability** and **performance**.
 - **Strings** — most ECS libraries only handle numbers. archetype-ecs stores strings in the same SoA layout with the same API.
 - **Small** — ~5 KB gzip, no dependencies.
 
+1M entities, `Position += Velocity`, Node.js:
+
+| | archetype-ecs | bitecs | wolf-ecs | harmony-ecs | miniplex |
+|---|---:|---:|---:|---:|---:|
+| ms / frame | **0.29** | 1.6 | 1.4 | 1.1 | 28.9 |
+| memory (MB) | 86+128 | 204 | 60 | **31** | 166 |
+
+Full benchmark details in [ADVANCED.md](./ADVANCED.md#benchmarks).
+
 ---
 
 ## Quick start
