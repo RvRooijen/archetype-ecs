@@ -33,6 +33,26 @@ So instead of a `Player` with a `move()` method, you have a `MovementSystem` tha
 
 ---
 
+## Ok, but why?
+
+Two reasons: **composability** and **performance**.
+
+**Composability.** Want some enemies to be on fire? Add a `Burning` component. Now your fire system processes every burning entity — enemy, player, barrel — without any of them needing to know about each other. No inheritance hierarchies, no `instanceof` checks, no mixins.
+
+**Performance.** In a class-based approach, 10,000 enemies are 10,000 objects scattered across memory. Iterating them means 10,000 cache misses. In archetype-ecs, all positions are stored in one contiguous `Float32Array`. Iterating them is one tight loop over a block of memory — the CPU prefetcher loves it.
+
+---
+
+## Why this one?
+
+- **SIMD acceleration** — `apply()` uses WebAssembly SIMD to process 4 entities per CPU instruction automatically. ~7× faster than a plain JS loop for numeric fields.
+- **No allocations in hot paths** — `apply`, `forEach`, `get`, `set`, and `count` don't allocate. Your frame budget goes to game logic, not garbage collection.
+- **TypeScript-first** — field names autocomplete, wrong fields are compile errors, `get()` returns the right type without casting.
+- **Strings** — most ECS libraries only handle numbers. archetype-ecs stores strings in the same SoA layout with the same API.
+- **Small** — ~5 KB gzip, no dependencies.
+
+---
+
 ## Quick start
 
 ```ts
