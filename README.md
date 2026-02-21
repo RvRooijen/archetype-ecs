@@ -21,49 +21,13 @@ npm i archetype-ecs
 
 ---
 
-## What is ECS?
+## Why ECS?
 
-ECS is a way of organizing game code. Instead of one big `Player` class that mixes data and behaviour together, you separate them:
+In OOP, a `Player` has a `move()` method, an `Enemy` has its own `move()`, and sooner or later you're wrestling with inheritance just to share logic. In ECS there are no types — just entities (IDs) with components (data) attached. A `MovementSystem` runs on every entity that has a `Position` and `Velocity`, whether it's a player, enemy, or barrel. Behaviour comes from combining components, not from hierarchies.
 
-- **Entity** — a thing in your game. Just a number (an ID). A player, an enemy, a bullet.
-- **Component** — data attached to an entity. A position, a health value, a name.
-- **System** — logic that runs on all entities that have certain components.
+This also maps well onto functional thinking: systems are transforms over data, with no hidden state. The difference is ECS mutates in place — all positions live in one contiguous `Float32Array`, and the movement system writes directly into it. That's where the performance comes from. In a class-based loop, 10,000 enemies are 10,000 heap objects with 10,000 pointer chases. Here they're one tight array walk the CPU can prefetch.
 
-So instead of a `Player` with a `move()` method, you have a `MovementSystem` that processes every entity that has both a `Position` and a `Velocity`. This makes it easy to share behaviour across entity types and very efficient to process lots of them.
-
----
-
-## Ok, but why?
-
-### vs object-oriented
-
-In OOP you'd write a `Player` class with a `move()` method, an `Enemy` class with its own `move()`, and eventually a base class `Character` to share the logic — until a `Barrel` also needs to move, and the hierarchy falls apart.
-
-ECS flips this around. There is no `Player` class. There's just an entity with a `Position` and a `Velocity`. The movement logic lives in one `MovementSystem` that runs on *every* entity that has those components, regardless of what "type" it is. Want a burning barrel? Add a `Burning` component. The fire system doesn't know or care that it's a barrel.
-
-Behaviour comes from combining components, not from inheritance.
-
-### vs functional
-
-Functional programming says: transform data with pure functions, avoid mutation. ECS agrees on the separation of data and logic — systems are essentially functions that transform component data. But it doesn't pretend mutation doesn't exist. Instead it embraces in-place updates: all positions live in one `Float32Array`, and the movement system writes directly into it.
-
-The result is code that reads like functional transforms but runs at the speed of raw array writes.
-
-### the memory angle
-
-In a class-based game loop, 10,000 enemies are 10,000 objects scattered across the heap. Iterating them means following 10,000 pointers to random memory locations — the CPU cache misses on almost every one.
-
-In archetype-ecs, all positions are packed into one contiguous `Float32Array`. Iterating them is a straight walk through memory. The CPU can prefetch ahead and process multiple values per instruction. That's where the 7× speedup over plain JS comes from — not from a clever algorithm, but from how the data is laid out.
-
----
-
-## Why this one?
-
-- **SIMD acceleration** — `apply()` uses WebAssembly SIMD to process 4 entities per CPU instruction automatically. ~7× faster than a plain JS loop for numeric fields.
-- **No allocations in hot paths** — `apply`, `forEach`, `get`, `set`, and `count` don't allocate. Your frame budget goes to game logic, not garbage collection.
-- **TypeScript-first** — field names autocomplete, wrong fields are compile errors, `get()` returns the right type without casting.
-- **Strings** — most ECS libraries only handle numbers. archetype-ecs stores strings in the same SoA layout with the same API.
-- **Small** — ~5 KB gzip, no dependencies.
+**Why this library specifically** — SIMD-accelerated bulk updates (~7× over plain JS), zero allocations in hot paths, TypeScript types that flow from definition to `get()` without casting, string component support, ~5 KB gzip.
 
 1M entities, `Position += Velocity`, Node.js:
 
@@ -72,7 +36,7 @@ In archetype-ecs, all positions are packed into one contiguous `Float32Array`. I
 | ms / frame | **0.29** | 1.6 | 1.4 | 1.1 | 28.9 |
 | memory (MB) | 86+128 | 204 | 60 | **31** | 166 |
 
-Full benchmark details in [ADVANCED.md](./ADVANCED.md#benchmarks).
+→ [Full benchmarks](./ADVANCED.md#benchmarks)
 
 ---
 
