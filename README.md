@@ -4,7 +4,7 @@
   <br><br>
   <strong>archetype-ecs</strong>
   <br>
-  <sub>ECS with TypedArray storage. No dependencies.</sub>
+  <sub>Manage thousands of game objects without slowing down. No dependencies.</sub>
   <br><br>
   <a href="https://www.npmjs.com/package/archetype-ecs"><img src="https://img.shields.io/npm/v/archetype-ecs.svg?style=flat-square&color=000" alt="npm" /></a>
   <img src="https://img.shields.io/badge/gzip-~5kb-000?style=flat-square" alt="size" />
@@ -13,7 +13,7 @@
 
 ---
 
-A TypeScript library for managing large numbers of game objects. Built around the Entity Component System pattern — designed to stay fast even with hundreds of thousands of entities.
+A TypeScript library for games and simulations. Keep your game logic clean and your update loop fast — even with hundreds of thousands of objects moving at once.
 
 ```
 npm i archetype-ecs
