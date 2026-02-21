@@ -35,26 +35,23 @@ In OOP, a `Player` has a `move()` method, an `Enemy` has its own `move()`, and s
   HealthSystem    needs: Health, skip: Dead   →  runs on id 1
 ```
 
-This also means the data layout can be optimised independently of the logic. In a class-based loop, 10,000 enemies are 10,000 heap objects scattered across memory. Reading their positions means following 10,000 pointers to random locations — a cache miss on almost every one. In archetype-ecs each field lives in its own packed array. Iterating positions is one straight walk the CPU can prefetch and process 4 at a time with SIMD.
+This also means the data layout can be optimised independently of the logic. Say you want to move all entities — you only need `x`, `y`, `vx`, and `vy`. Here's what each approach loads:
 
 ```
-OOP — objects scattered across the heap
+OOP — moving entities loads everything, even what you don't need:
 
-  ┌──────────────┐       ┌──────────────┐       ┌──────────────┐
-  │ x:  10       │       │ x:  55       │       │ x:  22       │
-  │ y:   4       │       │ y:   9       │       │ y:   7       │
-  │ hp:  80      │       │ hp:  50      │       │ hp: 100      │
-  └──────────────┘       └──────────────┘       └──────────────┘
-   addr 0x1a4c            addr 0x8f20   ↑        addr 0x3b91   ↑
-                                   cache miss              cache miss
+  entity 1  [ x │ y │ hp │ name │ inventory │ ai state │ ... ]
+                       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+                       loaded into memory, never read, wasted
 
-ECS — each field in a contiguous typed array
+  entity 2  [ x │ y │ hp │ name │ inventory │ ai state │ ... ]
+  entity 3  [ x │ y │ hp │ name │ inventory │ ai state │ ... ]
 
-  Position.x │ 10 │ 55 │ 22 │ 78 │ 31 │ ...    (Float32Array)
-  Position.y │  4 │  9 │  7 │ 31 │ 12 │ ...    (Float32Array)
-  Health.hp  │ 80 │ 50 │100 │ 60 │ 75 │ ...    (Int32Array)
-             └─────────────────────────────
-               sequential read, prefetched, SIMD-ready
+ECS — moving entities loads only x and y:
+
+  Position.x  [ 10 │ 55 │ 22 │ 78 │ ... ]  ← reads straight through
+  Position.y  [  4 │  9 │  7 │ 31 │ ... ]  ← reads straight through
+  Health.hp   [ 80 │ 50 │100 │ 60 │ ... ]  ← not touched
 ```
 
 **Why this library specifically** — SIMD-accelerated bulk updates (~7× over plain JS), zero allocations in hot paths, TypeScript types that flow from definition to `get()` without casting, string component support, ~5 KB gzip.
