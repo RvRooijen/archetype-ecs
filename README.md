@@ -35,11 +35,25 @@ So instead of a `Player` with a `move()` method, you have a `MovementSystem` tha
 
 ## Ok, but why?
 
-Two reasons: **composability** and **performance**.
+### vs object-oriented
 
-**Composability.** Want some enemies to be on fire? Add a `Burning` component. Now your fire system processes every burning entity — enemy, player, barrel — without any of them needing to know about each other. No inheritance hierarchies, no `instanceof` checks, no mixins.
+In OOP you'd write a `Player` class with a `move()` method, an `Enemy` class with its own `move()`, and eventually a base class `Character` to share the logic — until a `Barrel` also needs to move, and the hierarchy falls apart.
 
-**Performance.** In a class-based approach, 10,000 enemies are 10,000 objects scattered across memory. Iterating them means 10,000 cache misses. In archetype-ecs, all positions are stored in one contiguous `Float32Array`. Iterating them is one tight loop over a block of memory — the CPU prefetcher loves it.
+ECS flips this around. There is no `Player` class. There's just an entity with a `Position` and a `Velocity`. The movement logic lives in one `MovementSystem` that runs on *every* entity that has those components, regardless of what "type" it is. Want a burning barrel? Add a `Burning` component. The fire system doesn't know or care that it's a barrel.
+
+Behaviour comes from combining components, not from inheritance.
+
+### vs functional
+
+Functional programming says: transform data with pure functions, avoid mutation. ECS agrees on the separation of data and logic — systems are essentially functions that transform component data. But it doesn't pretend mutation doesn't exist. Instead it embraces in-place updates: all positions live in one `Float32Array`, and the movement system writes directly into it.
+
+The result is code that reads like functional transforms but runs at the speed of raw array writes.
+
+### the memory angle
+
+In a class-based game loop, 10,000 enemies are 10,000 objects scattered across the heap. Iterating them means following 10,000 pointers to random memory locations — the CPU cache misses on almost every one.
+
+In archetype-ecs, all positions are packed into one contiguous `Float32Array`. Iterating them is a straight walk through memory. The CPU can prefetch ahead and process multiple values per instruction. That's where the 7× speedup over plain JS comes from — not from a clever algorithm, but from how the data is laid out.
 
 ---
 
