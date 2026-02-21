@@ -259,7 +259,7 @@ add(a, random(min, max))
 | `random(min, max)` | 0.54 | 10.7 | **20×** |
 | `add(a, random())` | 0.62 | 12.9 | **21×** |
 
-When WASM SIMD is available and the fields are `f32`, operations automatically use the SIMD path. Otherwise they fall back to scalar JS. For operations that can't be expressed as simple math, use [`forEach`](#forEach--custom-operations).
+When WASM SIMD is available and the fields are `f32`, operations automatically use the SIMD path. Otherwise they fall back to scalar JS. For operations that can't be expressed as simple math, use [`forEach`](#forEach--per-entity-iteration).
 
 #### When does SIMD kick in?
 
@@ -297,21 +297,18 @@ When WASM mode is active, all numeric TypedArrays (`Float32Array`, `Int32Array`,
 
 ## TypeScript
 
-Component types are inferred from their definition. Field names autocomplete, wrong fields are compile errors.
+Field types flow from the component definition through to `get` — no casts needed.
 
 ```ts
-// Schema is inferred — Position becomes ComponentDef<'x' | 'y'>
 const Position = component('Position', 'f32', ['x', 'y'])
+const Name     = component('Name', { name: 'string', title: 'string' })
 
-// FieldRef — autocompletes to .x and .y
+// autocompletes to .x and .y — compile error for .z
 Position.x
-// compile error: Property 'z' does not exist
-Position.z
 
-// zero-alloc field access
-em.get(id, Position.x)
-// zero-alloc field write
-em.set(id, Position.x, 5)
+// return type is inferred from the field
+const x: number = em.get(id, Position.x)
+const n: string = em.get(id, Name.name)
 ```
 
 ---
@@ -320,7 +317,7 @@ em.set(id, Position.x, 5)
 
 ### `component(name)`
 
-Tag component — no data, used as a marker for queries.
+Tag component — no data, used as a marker for filtering.
 
 ### `component(name, type, fields)`
 
@@ -401,7 +398,7 @@ em.apply(Position.y, add(Position.y, Velocity.vy))
 
 // forEach — per-entity logic with conditional branches
 em.forEach([Position, Velocity], (id) => {
-  const vy = em.get(id, Velocity.vy) as number
+  const vy = em.get(id, Velocity.vy)
   em.set(id, Velocity.vy, Math.max(vy - 9.81 * dt, -50))
 })
 ```

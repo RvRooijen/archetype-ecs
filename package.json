@@ -13,7 +13,7 @@
   },
   "scripts": {
     "build": "tsc",
-    "test": "tsc && tsc -p tsconfig.test.json && node --test dist-test/tests/EntityManager.test.js dist-test/tests/System.test.js",
+    "test": "tsc && tsc -p tsconfig.test.json && node --test dist-test/tests/EntityManager.test.js dist-test/tests/System.test.js dist-test/tests/Targeting.test.js",
     "bench": "node --expose-gc bench/multi-ecs-bench.js",
     "bench:churn": "tsc && node --expose-gc bench/component-churn-bench.js",
     "bench:tsc-vs-tsgo": "bash bench/run-js-vs-go-ts.sh"
