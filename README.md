@@ -37,22 +37,7 @@ In OOP, a `Player` has a `move()` method, an `Enemy` has its own `move()`, and s
 
 This also means the data layout can be optimised independently of the logic. Say you want to move all entities — you only need `x`, `y`, `vx`, and `vy`. Here's what each approach loads:
 
-```
-OOP — moving entities loads everything, even what you don't need:
-
-  entity 1  [ x │ y │ hp │ name │ inventory │ ai state │ ... ]
-                       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-                       loaded into memory, never read, wasted
-
-  entity 2  [ x │ y │ hp │ name │ inventory │ ai state │ ... ]
-  entity 3  [ x │ y │ hp │ name │ inventory │ ai state │ ... ]
-
-ECS — moving entities loads only x and y:
-
-  Position.x  [ 10 │ 55 │ 22 │ 78 │ ... ]  ← reads straight through
-  Position.y  [  4 │  9 │  7 │ 31 │ ... ]  ← reads straight through
-  Health.hp   [ 80 │ 50 │100 │ 60 │ ... ]  ← not touched
-```
+<img src="./docs/memory-layout.svg" alt="OOP vs ECS memory layout" />
 
 **Why this library specifically** — SIMD-accelerated bulk updates (~7× over plain JS), zero allocations in hot paths, TypeScript types that flow from definition to `get()` without casting, string component support, ~5 KB gzip.
 
