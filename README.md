@@ -117,7 +117,7 @@ em.getComponent(player, Position)
 em.getComponent(player, Name)
 ```
 
-### Iteration — `apply`, `forEach`, and `query`
+### Iteration — `apply`, `forEach`, and `count`
 
 Three ways to work with entities. Pick the right one for the job. All examples below use the same components:
 
@@ -157,37 +157,20 @@ em.forEach([Health], (id) => {
 }, [Dead]) // skip already-dead entities
 ```
 
-#### `query` — cross-entity lookups, excludes, counting
-
-Returns a flat list of entity IDs. Use when you need to relate entities to each other, filter with excludes, or just count matches.
+#### `count` — zero-alloc counting
 
 ```ts
-// find the closest live enemy to the player
-// allocates number[] — ~21 ms / 1M entities
-const enemies = em.query([Position, Enemy], [Dead])
-let closest = -1, minDist = Infinity
-for (const id of enemies) {
-  const dx = em.get(id, Position.x) - playerX
-  const dy = em.get(id, Position.y) - playerY
-  const dist = dx * dx + dy * dy
-  if (dist < minDist) { minDist = dist; closest = id }
-}
-
-// store the result as a component
-em.addComponent(player, Target, { entityId: closest })
-
-// just need a count? ~0.001 ms / 1M entities, no allocation
+// ~0.001 ms / 1M entities, no allocation
 const aliveEnemies = em.count([Enemy], [Dead])
 ```
 
 #### When to use which
 
-| | `apply` | `forEach` | `query` |
+| | `apply` | `forEach` | `count` |
 |---|---|---|---|
-| **Use for** | Bulk math, no branching | Conditionals, structural changes | Cross-entity lookups, excludes, counting |
-| **Runs** | Every frame | Every frame | On demand |
-| **Allocates** | Nothing | Nothing | `number[]` of entity IDs |
-| **Access** | Declarative expressions | `get` / `set` per entity | `get` / `set` by entity ID |
+| **Use for** | Bulk math, no branching | Conditionals, structural changes | Counting matches |
+| **Allocates** | Nothing | Nothing | Nothing |
+| **Access** | Declarative expressions | `get` / `set` per entity | — |
 | **Filtering** | `{ with?, without? }` optional filter | `exclude?` array | `exclude?` array |
 
 ### Systems
@@ -371,7 +354,6 @@ Returns an entity manager. WASM SIMD is auto-detected and enabled by default. Pa
 | `getComponent(id, Comp)` | Get component data as object *(allocates)* |
 | `get(id, Comp.field)` | Read a single field |
 | `set(id, Comp.field, value)` | Write a single field |
-| `query(include, exclude?)` | Get matching entity IDs |
 | `count(include, exclude?)` | Count matching entities |
 | `apply(target, expr, filter?)` | Set a field to an expression result — SIMD-accelerated for `f32`. Optional `{ with?, without? }` restricts which archetypes are processed. |
 | `forEach(include, callback, exclude?)` | Iterate matching entities — callback receives `EntityId` |

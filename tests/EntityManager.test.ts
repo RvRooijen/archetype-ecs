@@ -84,8 +84,8 @@ describe('EntityManager', () => {
     });
   });
 
-  describe('query', () => {
-    it('returns entities matching component types', () => {
+  describe('forEach', () => {
+    it('visits entities matching component types', () => {
       const a = em.createEntity();
       em.addComponent(a, Position, { x: 0, y: 0 });
       em.addComponent(a, Velocity, { vx: 1, vy: 1 });
@@ -93,9 +93,10 @@ describe('EntityManager', () => {
       const b = em.createEntity();
       em.addComponent(b, Position, { x: 5, y: 5 });
 
-      const result = em.query([Position, Velocity]);
-      assert.ok(result.includes(a));
-      assert.ok(!result.includes(b));
+      const visited: number[] = [];
+      em.forEach([Position, Velocity], (id) => visited.push(id));
+      assert.ok(visited.includes(a));
+      assert.ok(!visited.includes(b));
     });
 
     it('exclude types filters out entities', () => {
@@ -106,9 +107,10 @@ describe('EntityManager', () => {
       em.addComponent(b, Position, { x: 1, y: 1 });
       em.addComponent(b, Health, { hp: 100 });
 
-      const result = em.query([Position], [Health]);
-      assert.ok(result.includes(a));
-      assert.ok(!result.includes(b));
+      const visited: number[] = [];
+      em.forEach([Position], (id) => visited.push(id), [Health]);
+      assert.ok(visited.includes(a));
+      assert.ok(!visited.includes(b));
     });
   });
 
@@ -304,12 +306,11 @@ describe('Typed Components (SoA)', () => {
       em.set(id, Pos.y, (em.get(id, Pos.y) as number) + (em.get(id, Vel.vy) as number));
     });
 
-    const ids = em.query([Pos, Vel]);
-    for (const id of ids) {
+    em.forEach([Pos, Vel], (id) => {
       const pos = em.getComponent(id, Pos)!;
       assert.ok((pos.x as number) >= 1);
       assert.ok(Math.abs(pos.y as number - 2) < 0.001);
-    }
+    });
   });
 
   it('serialize/deserialize round-trip with typed components', () => {
@@ -415,10 +416,12 @@ describe('Typed Components (SoA)', () => {
       const id = em.createEntity();
       em.addComponent(id, Name, { value: `entity_${i}` });
     }
-    const ids = em.query([Name]);
-    assert.equal(ids.length, 100);
-    assert.equal(em.get(ids[0], Name.value), 'entity_0');
-    assert.equal(em.get(ids[99], Name.value), 'entity_99');
+    assert.equal(em.count([Name]), 100);
+    let idx = 0;
+    em.forEach([Name], (id) => {
+      assert.equal(em.get(id, Name.value), `entity_${idx}`);
+      idx++;
+    });
   });
 
   it('string component swap-remove preserves data', () => {

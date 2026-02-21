@@ -45,7 +45,7 @@ export interface EntityManager {
   get<T extends number | string>(entityId: EntityId, fieldRef: FieldRef<T>): T;
   set(entityId: EntityId, fieldRef: FieldRef, value: number | string | ArrayLike<number>): void;
   hasComponent(entityId: EntityId, type: ComponentDef): boolean;
-  query(include: ComponentDef[], exclude?: ComponentDef[]): EntityId[];
+
   getAllEntities(): EntityId[];
   createEntityWith(...args: unknown[]): EntityId;
   count(include: ComponentDef[], exclude?: ComponentDef[]): number;
@@ -707,18 +707,6 @@ export function createEntityManager(options?: { wasm?: boolean }): EntityManager
       return arch ? arch.types.has(type) : false;
     },
 
-    query(includeTypes: ComponentDef[], excludeTypes?: ComponentDef[]): EntityId[] {
-      const matching = getMatchingArchetypes(includeTypes, excludeTypes);
-      const result: EntityId[] = [];
-      for (let a = 0; a < matching.length; a++) {
-        const arch = matching[a];
-        const ids = arch.entityIds;
-        for (let i = 0; i < arch.count; i++) {
-          result.push(ids[i]);
-        }
-      }
-      return result;
-    },
 
     getAllEntities(): EntityId[] {
       return [...allEntityIds];
